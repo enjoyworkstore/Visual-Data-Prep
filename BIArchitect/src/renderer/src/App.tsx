@@ -16,6 +16,7 @@ type AppContextType = {
   isAutoCameraMove: boolean;
   focusNode: (id: string, force?: boolean, isDragging?: boolean) => void;
   theme: 'light' | 'dark';
+  globalApiKey: string;
 };
 const AppContext = createContext<AppContextType>({} as AppContextType);
 
@@ -294,6 +295,19 @@ const calcData = (nId: string, nodes: CustomNode[], edges: Edge[], wbs: any): { 
   const input = calcData(inEdge.source, nodes, edges, wbs);
   let out = [...input.data], h = [...input.headers];
 
+  // ★ AI NodeのJavaScript実行処理
+  if (node.type === 'aiNode' && node.data.jsCode) {
+    try {
+      // eslint-disable-next-line no-new-func
+      const fn = new Function('input', node.data.jsCode);
+      const result = fn(out);
+      if (Array.isArray(result)) {
+        out = result;
+        if (out.length > 0) h = Object.keys(out[0]);
+      }
+    } catch (e) { console.error("AI Code Error:", e); }
+  }
+
   if (node.type === 'sortNode') {
     const { sortCol, sortOrder } = node.data;
     if (sortCol) out.sort((a, b) => sortOrder === 'desc' ? String(b[sortCol as string]).localeCompare(String(a[sortCol as string]), undefined, { numeric: true }) : String(a[sortCol as string]).localeCompare(String(b[sortCol as string]), undefined, { numeric: true }));
@@ -449,7 +463,8 @@ const useNodeLogic = (id: string) => {
 };
 
 const TgtHandle = ({ id, style }: any) => <Handle type="target" position={Position.Left} id={id} style={style} className="react-flow__handle z-10 -ml-2 nodrag" />;
-const SrcHandle = ({ col }: any) => <Handle type="source" position={Position.Right} className="react-flow__handle z-10 -mr-2 nodrag" />;
+// ★ TS Error 修正: 未使用の `col` プロパティ受け取りを削除
+const SrcHandle = () => <Handle type="source" position={Position.Right} className="react-flow__handle z-10 -mr-2 nodrag" />;
 
 const NodeWrap = memo(({ id, title, col, children, showTgt = true, multi = false, summary = '', helpText = '' }: any) => {
   const { onDel, isDark } = useNodeLogic(id);
@@ -498,7 +513,7 @@ const NodeWrap = memo(({ id, title, col, children, showTgt = true, multi = false
           {children}
         </div>
       </div>
-      <SrcHandle col={col} />
+      <SrcHandle />
     </div>
   );
 });
@@ -741,7 +756,7 @@ const PasteNode = memo(({ id, data }: any) => {
            onChange={e=>setText(e.target.value)} 
          />
          <button onClick={handleApply} disabled={!text} className="w-full bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white text-[10px] font-bold py-2 rounded nodrag shadow-sm transition-all active:scale-95">
-            貼付けデータをテーブル化
+           📝 データを適用
          </button>
       </div>
     </NodeWrap>
@@ -823,6 +838,73 @@ const MinusNode = memo(({ id, data }: any) => {
         <div className="space-y-1">
           <label className={`text-[8px] ${isDark ? 'text-[#888]' : 'text-gray-500'} uppercase tracking-widest font-bold`}>Subtract Key (B)</label>
           <select className={inputClass} value={data.keyB || ''} onChange={(e) => onChg('keyB', e.target.value)}><option value="">Select Column...</option>{fData.headersB?.map((h: string) => <option key={h} value={h}>{h}</option>)}</select>
+        </div>
+      </div>
+    </NodeWrap>
+  );
+});
+
+// ★ AI Node 実装
+const AINode = memo(({ id, data }: any) => {
+  const { onChg, isDark } = useNodeLogic(id);
+  const { globalApiKey } = useContext(AppContext);
+  const [prmt, setPrmt] = useState(data.aiPrompt || '');
+  const [isSug, setIsSug] = useState(false);
+  const [isGen, setIsGen] = useState(false);
+  const [sugs, setSugs] = useState<string[]>([]);
+
+  const getSug = async () => {
+    if (!globalApiKey) { alert("画面上部からGroq API Keyを設定してください"); return; }
+    setIsSug(true);
+    try {
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${globalApiKey}` },
+        body: JSON.stringify({
+          model: 'gemma2-9b-it',
+          messages: [{ role: 'user', content: 'データ整形のための短い指示(20文字以内)を3つ、カンマ区切りで提案して。例: 売上を数値化,空白を0で埋める' }]
+        })
+      });
+      const d = await res.json();
+      const txt = d.choices[0].message.content;
+      setSugs(txt.split(',').map((s: string) => s.trim()).filter((s:string) => s));
+    } catch (e) { alert("提案の取得に失敗しました"); } finally { setIsSug(false); }
+  };
+
+  const genCode = async () => {
+    if (!globalApiKey) { alert("画面上部からGroq API Keyを設定してください"); return; }
+    setIsGen(true);
+    try {
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${globalApiKey}` },
+        body: JSON.stringify({
+          model: 'gemma2-9b-it',
+          messages: [{ role: 'user', content: `以下の指示を満たすJavaScriptのデータ変換コードを書いてください(input配列を受け取りout配列を返す)。\n指示: ${prmt}\nコードのみを出力してください。` }]
+        })
+      });
+      const d = await res.json();
+      const c = d.choices[0].message.content;
+      const m = c.match(/(?:javascript|js)?\n([\s\S]*?)\n```/);
+      onChg('jsCode', m ? m[1] : c.replace(new RegExp('```javascript', 'g'), '').replace(new RegExp('```', 'g'), '').trim());
+    } catch (e) { alert("コード生成エラー"); } finally { setIsGen(false); }
+  };
+
+  return (
+    <NodeWrap id={id} title="Gemma Clean" col={isDark ? "text-fuchsia-400" : "text-fuchsia-600"} helpText="AIに自然言語で指示を出して、データを整形するためのJavaScriptコードを自動生成・実行します。">
+      <div className="space-y-3">
+        <div className="space-y-1">
+          <div className="flex justify-between items-center">
+            <label className={`text-[8px] font-bold uppercase tracking-widest ${isDark ? 'text-fuchsia-400' : 'text-fuchsia-600'}`}>✨ Prompt to Gemma</label>
+            <button onClick={getSug} disabled={isSug} className={`text-[8px] px-2 py-0.5 rounded disabled:opacity-50 transition-colors nodrag ${isDark ? 'bg-fuchsia-900/30 text-fuchsia-300 hover:bg-fuchsia-600/50' : 'bg-fuchsia-50 text-fuchsia-600 hover:bg-fuchsia-100'}`}>{isSug ? '...' : '💡 提案'}</button>
+          </div>
+          {sugs.length > 0 && <div className="flex flex-wrap gap-1 mb-2">{sugs.map((s, i) => <span key={i} onClick={() => { setPrmt(s); onChg('aiPrompt', s); }} className={`text-[9px] border px-2 py-1 rounded cursor-pointer transition-colors nodrag ${isDark ? 'bg-[#2a1a2a] border-fuchsia-500/30 text-fuchsia-300 hover:bg-[#3a2a3a]' : 'bg-fuchsia-50 border-fuchsia-200 text-fuchsia-700 hover:bg-fuchsia-100'}`}>{s}</span>)}</div>}
+          <textarea className={`w-full text-[10px] p-2 border rounded h-16 outline-none transition-colors custom-scrollbar nodrag ${isDark ? 'bg-[#2a1a2a] border-fuchsia-500/50 text-white focus:border-fuchsia-400' : 'bg-white border-gray-300 text-gray-800 focus:border-fuchsia-500'}`} placeholder="例: 売上列のカンマを削除" value={prmt} onChange={(e) => setPrmt(e.target.value)} onBlur={() => onChg('aiPrompt', prmt)} />
+        </div>
+        <button onClick={genCode} disabled={isGen || !prmt} className="w-full bg-fuchsia-600 hover:bg-fuchsia-500 disabled:opacity-50 text-white text-[10px] font-bold py-2 rounded shadow-sm transition-all active:scale-95 nodrag">{isGen ? '生成中...' : '⚙️ コードを生成'}</button>
+        <div className="space-y-1">
+          <label className={`text-[8px] font-bold uppercase tracking-widest flex justify-between ${isDark ? 'text-[#888]' : 'text-gray-500'}`}><span>Generated JS</span></label>
+          <textarea className={`w-full text-[10px] font-mono p-2 border rounded h-20 outline-none custom-scrollbar transition-colors nodrag ${isDark ? 'bg-[#1a1a1a] text-[#a5b4fc] border-[#444] focus:border-fuchsia-400' : 'bg-gray-50 text-indigo-600 border-gray-300 focus:border-fuchsia-500'}`} value={data.jsCode || ''} onChange={(e) => onChg('jsCode', e.target.value)} />
         </div>
       </div>
     </NodeWrap>
@@ -1012,7 +1094,7 @@ const ChartNode = memo(({ id, data }: any) => {
   );
 });
 
-const nodeTypesObj = { dataNode: DataNode, folderSourceNode: FolderSourceNode, webSourceNode: WebSourceNode, pasteNode: PasteNode, unionNode: UnionNode, joinNode: JoinNode, vlookupNode: VlookupNode, minusNode: MinusNode, groupByNode: GroupByNode, sortNode: SortNode, transformNode: TransformNode, selectNode: SelectNode, filterNode: FilterNode, chartNode: ChartNode };
+const nodeTypesObj = { dataNode: DataNode, folderSourceNode: FolderSourceNode, webSourceNode: WebSourceNode, pasteNode: PasteNode, unionNode: UnionNode, joinNode: JoinNode, vlookupNode: VlookupNode, minusNode: MinusNode, groupByNode: GroupByNode, sortNode: SortNode, transformNode: TransformNode, selectNode: SelectNode, filterNode: FilterNode, chartNode: ChartNode, aiNode: AINode };
 
 const NodeNavigator = ({ tList, nodes }: { tList: any[], nodes: CustomNode[] }) => {
   const { focusNode, theme } = useContext(AppContext);
@@ -1056,6 +1138,7 @@ const NodeNavigator = ({ tList, nodes }: { tList: any[], nodes: CustomNode[] }) 
         else if (n.type === 'selectNode' && n.data.selectedColumns) subText = `${n.data.selectedColumns.length} cols selected`;
         else if (n.type === 'joinNode' || n.type === 'unionNode' || n.type === 'minusNode') subText = "Merge Data";
         else if (n.type === 'vlookupNode' && n.data.targetCol) subText = `Add ${n.data.targetCol}`;
+        else if (n.type === 'aiNode') subText = "AI Generation";
         else if ((n.type === 'dataNode' || n.type === 'folderSourceNode') && n.data.useFirstRowAsHeader) subText = "Setup Required";
 
         return (
@@ -1099,12 +1182,21 @@ const FlowBuilder = () => {
   
   const [isAutoCameraMove, setIsAutoCameraMove] = useState(true);
   const [previewNodeId, setPreviewNodeId] = useState<string | null>(null);
+
+  // ★ AI Node連携用のステート
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [globalApiKey, setGlobalApiKey] = useState('');
+  const [isAiGenerating, setIsAiGenerating] = useState(false);
   
   // ★ テーマ管理
   const [theme, setTheme] = useState<'light' | 'dark'>('dark');
   useEffect(() => {
-    const saved = localStorage.getItem('bi-architect-theme') as 'light' | 'dark';
-    if (saved === 'light' || saved === 'dark') setTheme(saved);
+    const savedTheme = localStorage.getItem('bi-architect-theme') as 'light' | 'dark';
+    if (savedTheme === 'light' || savedTheme === 'dark') setTheme(savedTheme);
+    const localFlows = localStorage.getItem('bi-architect-flows');
+    if (localFlows) setSavedFlows(JSON.parse(localFlows));
+    const savedKey = localStorage.getItem('bi-architect-api-key');
+    if (savedKey) setGlobalApiKey(savedKey);
   }, []);
 
   useEffect(() => {
@@ -1123,6 +1215,37 @@ const FlowBuilder = () => {
     });
   }, []);
 
+  const handleSaveKey = (e: React.ChangeEvent<HTMLInputElement>) => { 
+    setGlobalApiKey(e.target.value); 
+    localStorage.setItem('bi-architect-api-key', e.target.value); 
+  };
+
+  const handleAIGen = () => {
+    if (!aiPrompt) return; setIsAiGenerating(true);
+    setTimeout(() => {
+      let newNodes: Node[] = [], newEdges: Edge[] = [], currX = 50, prevId: string | null = null;
+      const addN = (type: string, data: any = {}) => {
+        const id = `n-ai-${Date.now()}-${Math.floor(Math.random()*1000)}`;
+        newNodes.push({ id, type, position: { x: currX, y: 150 }, data: { useFirstRowAsHeader: true, ...data } });
+        if (prevId) newEdges.push({ id: `e-${prevId}-${id}`, source: prevId, target: id, animated: true, style: { stroke: '#38bdf8', strokeWidth: 4 } });
+        prevId = id; currX += 280;
+      };
+      addN('dataNode'); 
+      const p = aiPrompt.toLowerCase();
+      if (p.match(/抽出|消|整形|大文字|小文字|半角|全角/)) addN('aiNode', { aiPrompt: 'データを整形して' });
+      if (p.match(/置換|置き換え/)) addN('transformNode', { command: 'replace' });
+      if (p.match(/結合|マージ|join|くっつけ/)) addN('joinNode');
+      if (p.match(/ユニオン|追加|縦/)) addN('unionNode');
+      if (p.match(/差|マイナス|引いて/)) addN('minusNode');
+      if (p.match(/フィルタ|絞り込|条件|以上|以下/)) addN('filterNode');
+      if (p.match(/選択|選んで|のみ/)) addN('selectNode');
+      if (p.match(/集計|まとめ|ごと|平均|合計|カウント/)) addN('groupByNode', { aggType: p.match(/平均/) ? 'avg' : p.match(/カウント|件数/) ? 'count' : 'sum' });
+      if (p.match(/ソート|並び|順/)) addN('sortNode', { sortOrder: p.match(/降順|大きい順|高い順/) ? 'desc' : 'asc' });
+      if (p.match(/グラフ|可視化|チャート|図/)) addN('chartNode', { chartType: p.match(/折れ線|推移|ライン/) ? 'line' : 'bar' });
+      _setNodes(newNodes); _setEdges(newEdges); setAiPrompt(''); setIsAiGenerating(false);
+    }, 1200);
+  };
+
   const focusNode = useCallback((nodeId: string, force: boolean = false) => {
     if (!isAutoCameraMove && !force) return;
     
@@ -1134,11 +1257,6 @@ const FlowBuilder = () => {
       }
     }, 50);
   }, [isAutoCameraMove, getNode, setCenter, getZoom]);
-
-  useEffect(() => {
-    const local = localStorage.getItem('bi-architect-flows');
-    if (local) setSavedFlows(JSON.parse(local));
-  }, []);
 
   const handleSave = (name: string) => { const up = [...savedFlows, { id: Date.now().toString(), name, updatedAt: new Date().toLocaleString(), flow: { nodes, edges } }]; setSavedFlows(up); localStorage.setItem('bi-architect-flows', JSON.stringify(up)); };
   const handleLoad = (f: any) => { _setNodes(f.flow.nodes.map((n: any) => (n.type === 'dataNode' || n.type === 'folderSourceNode') && n.data.fileName ? { ...n, data: { ...n.data, needsUpload: true } } : n)); _setEdges(f.flow.edges || []); setWorkbooks({}); };
@@ -1229,6 +1347,7 @@ const FlowBuilder = () => {
     { t: 'groupByNode', l: 'Group By', i: Icons.GroupBy, c: 'text-blue-500 dark:text-blue-400', desc: '指定したキーでデータをグループ化し、合計や件数を集計します。' },
     { t: 'sortNode', l: 'Sort', i: Icons.Sort, c: 'text-blue-500 dark:text-blue-400', desc: '指定した列を基準に、データを昇順・降順に並び替えます。' },
     { t: 'transformNode', l: 'Transform', i: Icons.Transform, c: 'text-blue-500 dark:text-blue-400', desc: 'データの内容を書き換えたり、型変換や0埋めなどを行うクレンジングノードです。' },
+    { t: 'aiNode', l: 'Gemma Clean', i: '✨', c: 'text-fuchsia-500 dark:text-fuchsia-400', desc: 'AIにプロンプトを投げてデータ整形のJavaScriptを自動生成・適用します。' },
     { t: 'selectNode', l: 'Select', i: Icons.Select, c: 'text-blue-500 dark:text-blue-400', desc: '必要な列(カラム)だけを選んで残し、不要な列を削除します。' },
     { t: 'filterNode', l: 'Filter', i: Icons.Filter, c: 'text-blue-500 dark:text-blue-400', desc: '条件に一致する行だけを抽出します。(例: 売上1000以上)' },
     { t: 'chartNode', l: 'Visualizer', i: Icons.Chart, c: 'text-blue-500 dark:text-blue-400', desc: 'データをグラフ化します。Dashboardタブで一覧表示できます。' }
@@ -1237,7 +1356,7 @@ const FlowBuilder = () => {
   const isDark = theme === 'dark';
 
   return (
-    <AppContext.Provider value={{ workbooks, setWorkbooks, setRangeModalNode, nodeFlowData, isAutoCameraMove, focusNode, theme }}>
+    <AppContext.Provider value={{ workbooks, setWorkbooks, setRangeModalNode, nodeFlowData, isAutoCameraMove, focusNode, theme, globalApiKey }}>
       <div className={`h-screen w-screen flex flex-col font-sans overflow-hidden transition-colors ${isDark ? 'bg-[#1a1a1a]' : 'bg-gray-50'}`}>
         <GlobalStyle />
         <div className={`border-b px-6 py-3 flex justify-between items-center z-40 gap-4 no-print transition-colors ${isDark ? 'bg-[#181818] border-[#333] shadow-md' : 'bg-white border-gray-200 shadow-sm'}`}>
@@ -1246,29 +1365,34 @@ const FlowBuilder = () => {
             BI Architect
           </h1>
           
-          <div className="flex-1 flex justify-center">
-            <div className={`px-4 py-1.5 rounded-full text-[10px] tracking-widest font-bold flex items-center gap-2 border ${isDark ? 'bg-[#1e1e1e] border-[#333] text-[#aaa]' : 'bg-gray-50 border-gray-200 text-gray-500'}`}>
-              <span className="text-blue-500">{Icons.Diamond}</span> ノードを繋いで構築 <span className={`mx-1 ${isDark ? 'text-[#555]' : 'text-gray-400'}`}>|</span> 接続線は右クリックで削除
-            </div>
+          <div className="flex-1 max-w-xl relative mx-4 hidden md:block">
+            <input type="text" placeholder="例: 売上順にソートして棒グラフを作って" 
+                   className={`w-full text-[11px] px-10 py-2 rounded-full outline-none transition-all border ${isDark ? 'bg-[#1e1e1e] border-[#444] text-white focus:border-blue-500/80' : 'bg-gray-100 border-gray-300 text-gray-800 focus:border-blue-500'}`} 
+                   value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) handleAIGen(); }} />
+            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-blue-500 text-base">🤖</span>
           </div>
 
-          <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center gap-2 shrink-0">
+            <input type="password" placeholder="🔑 Groq API Key" 
+                   className={`text-[10px] px-3 py-2 rounded-lg outline-none w-32 md:w-48 shadow-sm transition-colors border ${isDark ? 'bg-[#1e1e1e] border-fuchsia-500/30 focus:border-fuchsia-500 text-fuchsia-300' : 'bg-fuchsia-50 border-fuchsia-200 focus:border-fuchsia-400 text-fuchsia-600'}`} 
+                   value={globalApiKey} onChange={handleSaveKey} />
+
             <button onClick={toggleTheme} className={`text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-2 shadow-sm active:scale-95 transition-colors border ${isDark ? 'bg-[#252526] hover:bg-[#333] border-[#444] text-[#666]' : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-600'}`} title="Toggle Theme">
               <span className="flex items-center justify-center text-lg">{isDark ? Icons.Sun : Icons.Moon}</span>
             </button>
 
             <button onClick={() => setIsAutoCameraMove(!isAutoCameraMove)} className={`text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-2 shadow-sm active:scale-95 transition-colors border ${isDark ? 'bg-[#252526] hover:bg-[#333] border-[#444]' : 'bg-gray-50 hover:bg-gray-100 border-gray-200'} ${isAutoCameraMove ? (isDark ? 'text-blue-400' : 'text-blue-500') : (isDark ? 'text-[#666]' : 'text-gray-500')}`} title="Auto Camera Focus">
-              <span className="flex items-center justify-center gap-1.5">{Icons.Focus} {isAutoCameraMove ? 'Camera Focus: ON' : 'Camera Focus: OFF'}</span>
+              <span className="flex items-center justify-center gap-1.5">{Icons.Focus}</span>
             </button>
             
-            <button onClick={() => setIsSqlModalOpen(true)} className={`text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-1.5 shadow-sm active:scale-95 transition-colors border ${isDark ? 'bg-[#252526] hover:bg-blue-900/30 border-[#444] hover:border-blue-500/50 text-[#aaa] hover:text-blue-400' : 'bg-gray-50 hover:bg-blue-50 border-gray-200 hover:border-blue-300 text-gray-600 hover:text-blue-600'}`}>
+            <button onClick={() => setIsSqlModalOpen(true)} className={`text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-1.5 shadow-sm active:scale-95 transition-colors border hidden md:flex ${isDark ? 'bg-[#252526] hover:bg-blue-900/30 border-[#444] hover:border-blue-500/50 text-[#aaa] hover:text-blue-400' : 'bg-gray-50 hover:bg-blue-50 border-gray-200 hover:border-blue-300 text-gray-600 hover:text-blue-600'}`}>
               <span className="flex items-center justify-center gap-1">{Icons.Code} SQL</span>
             </button>
-            <button onClick={() => setIsResetModalOpen(true)} className={`text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-1.5 shadow-sm active:scale-95 transition-colors border ${isDark ? 'bg-[#252526] hover:bg-red-900/30 border-[#444] hover:border-red-500/50 text-[#aaa] hover:text-red-400' : 'bg-gray-50 hover:bg-red-50 border-gray-200 hover:border-red-300 text-gray-600 hover:text-red-600'}`}>
+            <button onClick={() => setIsResetModalOpen(true)} className={`text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-1.5 shadow-sm active:scale-95 transition-colors border hidden md:flex ${isDark ? 'bg-[#252526] hover:bg-red-900/30 border-[#444] hover:border-red-500/50 text-[#aaa] hover:text-red-400' : 'bg-gray-50 hover:bg-red-50 border-gray-200 hover:border-red-300 text-gray-600 hover:text-red-600'}`}>
               <span className="flex items-center justify-center gap-1">{Icons.Trash} RESET</span>
             </button>
             <button onClick={() => setIsSaveLoadOpen(true)} className={`text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-1.5 shadow-sm active:scale-95 transition-colors border ${isDark ? 'bg-[#252526] hover:bg-[#333] border-[#444] text-white' : 'bg-gray-800 hover:bg-gray-700 border-gray-700 text-white'}`}>
-              <span className="flex items-center justify-center gap-1">{Icons.Save} / {Icons.Folder} PROJECTS</span>
+              <span className="flex items-center justify-center gap-1">{Icons.Save} / {Icons.Folder}</span>
             </button>
           </div>
         </div>
@@ -1283,8 +1407,8 @@ const FlowBuilder = () => {
             <div className={`flex flex-col ${isSidebarOpen ? 'gap-3 pr-2' : 'gap-4'} overflow-y-auto overflow-x-hidden pb-10 custom-scrollbar`}>
               {tList.map(item => {
                 // Tailwind dynamic classes check 
-                const hoverBorderClass = isDark ? (item.t === 'vlookupNode' ? 'hover:border-pink-500' : item.t === 'minusNode' ? 'hover:border-rose-500' : item.t === 'webSourceNode' ? 'hover:border-emerald-500' : item.t === 'folderSourceNode' ? 'hover:border-indigo-500' : item.t === 'pasteNode' ? 'hover:border-orange-500' : 'hover:border-blue-500') 
-                                              : (item.t === 'vlookupNode' ? 'hover:border-pink-400' : item.t === 'minusNode' ? 'hover:border-rose-400' : item.t === 'webSourceNode' ? 'hover:border-emerald-400' : item.t === 'folderSourceNode' ? 'hover:border-indigo-400' : item.t === 'pasteNode' ? 'hover:border-orange-400' : 'hover:border-blue-400');
+                const hoverBorderClass = isDark ? (item.t === 'aiNode' ? 'hover:border-fuchsia-500' : item.t === 'vlookupNode' ? 'hover:border-pink-500' : item.t === 'minusNode' ? 'hover:border-rose-500' : item.t === 'webSourceNode' ? 'hover:border-emerald-500' : item.t === 'folderSourceNode' ? 'hover:border-indigo-500' : item.t === 'pasteNode' ? 'hover:border-orange-500' : 'hover:border-blue-500') 
+                                              : (item.t === 'aiNode' ? 'hover:border-fuchsia-400' : item.t === 'vlookupNode' ? 'hover:border-pink-400' : item.t === 'minusNode' ? 'hover:border-rose-400' : item.t === 'webSourceNode' ? 'hover:border-emerald-400' : item.t === 'folderSourceNode' ? 'hover:border-indigo-400' : item.t === 'pasteNode' ? 'hover:border-orange-400' : 'hover:border-blue-400');
                 return (
                 <div key={item.t} className={`relative group/btn rounded-xl cursor-grab flex items-center transition-all shadow-sm active:scale-95 border ${isDark ? 'bg-[#252526] border-[#333]' : 'bg-gray-50 border-gray-200'} ${hoverBorderClass} ${isSidebarOpen ? 'p-3 gap-4' : 'p-3 justify-center w-12 h-12'}`} onDragStart={(e) => e.dataTransfer.setData('application/reactflow', item.t)} draggable>
                   <div className={`${item.c} text-lg group-hover/btn:scale-125 transition-transform ${isSidebarOpen ? '' : 'text-xl'}`}>{item.i}</div>
@@ -1298,6 +1422,7 @@ const FlowBuilder = () => {
             </div>
           </aside>
           <div className="flex-1 relative transition-colors">
+            {isAiGenerating && <div className={`absolute inset-0 z-50 flex items-center justify-center flex-col gap-4 backdrop-blur-sm ${isDark ? 'bg-[#1e1e1e]/60' : 'bg-white/60'}`}><div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div></div>}
             <ReactFlow 
               nodes={nodes} 
               edges={edges} 
@@ -1793,7 +1918,7 @@ const RangeSelectorModal = ({ isOpen, onClose, workbook, currentSheet, onRangesC
         <div className={`p-4 border-b flex flex-col font-sans transition-colors ${isDark ? 'bg-[#1a1a1a] border-[#444]' : 'bg-gray-50 border-gray-200'}`}>
           <div className="flex justify-between items-center mb-2">
             <h2 className={`text-[12px] font-bold uppercase tracking-[0.4em] flex items-center gap-2 ${isDark ? 'text-white' : 'text-gray-800'}`}>
-              <span className="text-blue-500">{Icons.Select}</span> 抽出範囲の選択
+              <span className="text-blue-500">{Icons.Select}</span> Visual Range Selection
             </h2>
             <div className="flex items-center gap-8">
               <div className="flex items-center gap-3">
@@ -1807,7 +1932,7 @@ const RangeSelectorModal = ({ isOpen, onClose, workbook, currentSheet, onRangesC
           </div>
           <p className={`text-[10px] leading-relaxed ${isDark ? 'text-[#888]' : 'text-gray-600'}`}>
             🖱️ 抽出したいデータの範囲を<strong>マウスでドラッグして選択</strong>してください。（複数の範囲を選択することも可能です）<br/>
-            ✅ 選択後、右側のパネルで<strong>「1行目をヘッダーにする」</strong>オプションをオンにすると、最初の行が列名として認識されます。
+            ✅ 選択後、右側のパネルで<strong>「1行目をヘッダーとして使用する (First row as Header)」</strong>オプションをオンにすると、最初の行が列名として認識されます。
           </p>
         </div>
         <div className="flex-1 flex overflow-hidden">
@@ -1847,7 +1972,7 @@ const RangeSelectorModal = ({ isOpen, onClose, workbook, currentSheet, onRangesC
             <h3 className={`text-[10px] font-bold uppercase border-b pb-3 ${isDark ? 'text-[#888] border-[#444]' : 'text-gray-600 border-gray-200'}`}>Selection Settings</h3>
             <label className="flex items-center gap-3 cursor-pointer group">
               <input type="checkbox" checked={uHead} onChange={(e) => setUHead(e.target.checked)} className="w-4 h-4 accent-blue-500" />
-              <span className={`text-[11px] uppercase font-bold transition-colors ${isDark ? 'text-[#ccc] group-hover:text-white' : 'text-gray-700 group-hover:text-gray-900'}`}>1行目をヘッダーにする</span>
+              <span className={`text-[11px] uppercase font-bold transition-colors ${isDark ? 'text-[#ccc] group-hover:text-white' : 'text-gray-700 group-hover:text-gray-900'}`}>First row as Header</span>
             </label>
             <div className="flex-1 overflow-auto space-y-3 pr-2 custom-scrollbar">
               {sRanges.map((rs, i) => (
@@ -1862,7 +1987,7 @@ const RangeSelectorModal = ({ isOpen, onClose, workbook, currentSheet, onRangesC
                 </div>
               ))}
             </div>
-            <button onClick={() => {onRangesConfirm(sRanges, uHead); onClose();}} className="bg-blue-600 hover:bg-blue-500 py-3.5 rounded-xl text-[11px] font-bold text-white uppercase shadow-xl active:scale-95 transition-all">選択を適用</button>
+            <button onClick={() => {onRangesConfirm(sRanges, uHead); onClose();}} className="bg-blue-600 hover:bg-blue-500 py-3.5 rounded-xl text-[11px] font-bold text-white uppercase shadow-xl active:scale-95 transition-all">Apply Selection</button>
           </div>
         </div>
       </div>
