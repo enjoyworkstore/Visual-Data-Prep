@@ -16,7 +16,7 @@ type AppContextType = {
   isAutoCameraMove: boolean;
   focusNode: (id: string, force?: boolean, isDragging?: boolean) => void;
   theme: 'light' | 'dark';
-  globalApiKey: string;
+  activePreviewId: string | null;
 };
 const AppContext = createContext<AppContextType>({} as AppContextType);
 
@@ -78,6 +78,7 @@ const IconSvg = ({ children }: { children: React.ReactNode }) => (
 const Icons = {
   Sun: <IconSvg><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></IconSvg>,
   Moon: <IconSvg><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></IconSvg>,
+  Help: <IconSvg><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></IconSvg>,
   Source: <IconSvg><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></IconSvg>,
   FolderAuto: <IconSvg><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><path d="M12 11v6"/><polyline points="9 14 12 17 15 14"/></IconSvg>,
   Web: <IconSvg><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></IconSvg>,
@@ -88,6 +89,7 @@ const Icons = {
   GroupBy: <IconSvg><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></IconSvg>,
   Sort: <IconSvg><path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="m21 8-4-4-4 4"/><path d="M17 4v16"/></IconSvg>,
   Transform: <IconSvg><path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="7" r="3"/><circle cx="8" cy="17" r="3"/></IconSvg>,
+  Calculate: <IconSvg><rect x="4" y="2" width="16" height="20" rx="2" ry="2"/><line x1="8" y1="6" x2="16" y2="6"/><line x1="16" y1="14" x2="16" y2="18"/><path d="M16 10h.01"/><path d="M12 10h.01"/><path d="M8 10h.01"/><path d="M12 14h.01"/><path d="M8 14h.01"/><path d="M12 18h.01"/><path d="M8 18h.01"/></IconSvg>,
   Select: <IconSvg><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></IconSvg>,
   Filter: <IconSvg><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></IconSvg>,
   Chart: <IconSvg><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></IconSvg>,
@@ -148,7 +150,6 @@ const calcData = (nId: string, nodes: CustomNode[], edges: Edge[], wbs: any): { 
         const parser = new DOMParser();
         const doc = parser.parseFromString(raw, "text/html");
         
-        // ページ内のすべてのテーブルを取得し、一番行数が多いもの（メインのデータ表）を選ぶ
         const tables = Array.from(doc.querySelectorAll('table'));
         let targetTable = tables[0];
         let maxRows = 0;
@@ -162,14 +163,12 @@ const calcData = (nId: string, nodes: CustomNode[], edges: Edge[], wbs: any): { 
 
         if (targetTable) {
           const rows = Array.from(targetTable.querySelectorAll('tr'));
-          // ヘッダー行を探す（thがある行、なければ1行目）
           let headerIdx = 0;
           for (let i = 0; i < rows.length; i++) {
             if (rows[i].querySelector('th')) { headerIdx = i; break; }
           }
 
           let ths = Array.from(rows[headerIdx]?.querySelectorAll('th, td') || []).map(th => th.textContent?.replace(/\s+/g, ' ').trim() || '');
-          // 空のヘッダーや重複するヘッダーを修正
           const seen = new Set();
           fHdrs = (ths.length > 0 ? ths : Array.from({length: rows[0]?.querySelectorAll('td').length || 0}, (_, i) => `Col_${i+1}`)).map((h, i) => {
             let newH = h === '' ? `Col_${i+1}` : h;
@@ -295,19 +294,6 @@ const calcData = (nId: string, nodes: CustomNode[], edges: Edge[], wbs: any): { 
   const input = calcData(inEdge.source, nodes, edges, wbs);
   let out = [...input.data], h = [...input.headers];
 
-  // ★ AI NodeのJavaScript実行処理
-  if (node.type === 'aiNode' && node.data.jsCode) {
-    try {
-      // eslint-disable-next-line no-new-func
-      const fn = new Function('input', node.data.jsCode);
-      const result = fn(out);
-      if (Array.isArray(result)) {
-        out = result;
-        if (out.length > 0) h = Object.keys(out[0]);
-      }
-    } catch (e) { console.error("AI Code Error:", e); }
-  }
-
   if (node.type === 'sortNode') {
     const { sortCol, sortOrder } = node.data;
     if (sortCol) out.sort((a, b) => sortOrder === 'desc' ? String(b[sortCol as string]).localeCompare(String(a[sortCol as string]), undefined, { numeric: true }) : String(a[sortCol as string]).localeCompare(String(b[sortCol as string]), undefined, { numeric: true }));
@@ -431,20 +417,46 @@ const calcData = (nId: string, nodes: CustomNode[], edges: Edge[], wbs: any): { 
     }
   }
 
+  if (node.type === 'calculateNode') {
+    const { colA, colB, operator, newColName } = node.data;
+    if (colA && colB && newColName) {
+      out = out.map(r => {
+        let valA = r[colA];
+        let valB = r[colB];
+        let result: any = null;
+
+        if (operator === 'concat') {
+          result = String(valA || '') + String(valB || '');
+        } else {
+          const numA = Number(valA) || 0;
+          const numB = Number(valB) || 0;
+          if (operator === 'add') result = numA + numB;
+          else if (operator === 'sub') result = numA - numB;
+          else if (operator === 'mul') result = numA * numB;
+          else if (operator === 'div') result = numB !== 0 ? numA / numB : null;
+        }
+
+        return { ...r, [newColName]: result };
+      });
+      h = [...h, newColName];
+    }
+  }
+
   return { data: out, headers: h };
 };
 
 const useNodeLogic = (id: string) => {
-  const { nodeFlowData, isAutoCameraMove, focusNode, theme } = useContext(AppContext);
+  const { nodeFlowData, isAutoCameraMove, focusNode, theme, activePreviewId } = useContext(AppContext);
   const { updateNodeData, setNodes, setEdges, getEdges } = useReactFlow();
   const isDark = theme === 'dark';
   
   return { 
     fData: nodeFlowData[id] || { incomingHeaders: [], headersA: [], headersB: [] }, 
     isDark,
+    activePreviewId,
     onChg: (k: string, v: any) => {
       updateNodeData(id, { [k]: v });
-      if (['command', 'joinType', 'chartType', 'matchType', 'aggType', 'groupCol', 'sortCol', 'targetCol', 'filterCol', 'xAxis', 'yAxis', 'applyCond', 'dataType', 'fetchCol'].includes(k)) {
+      if (['command', 'joinType', 'chartType', 'matchType', 'aggType', 'groupCol', 'sortCol', 'targetCol', 'filterCol', 'xAxis', 'yAxis', 'applyCond', 'dataType', 'fetchCol', 'colA', 'colB', 'operator', 'newColName'].includes(k)) {
         focusNode(id);
       }
     }, 
@@ -463,16 +475,20 @@ const useNodeLogic = (id: string) => {
 };
 
 const TgtHandle = ({ id, style }: any) => <Handle type="target" position={Position.Left} id={id} style={style} className="react-flow__handle z-10 -ml-2 nodrag" />;
-// ★ TS Error 修正: 未使用の `col` プロパティ受け取りを削除
 const SrcHandle = () => <Handle type="source" position={Position.Right} className="react-flow__handle z-10 -mr-2 nodrag" />;
 
 const NodeWrap = memo(({ id, title, col, children, showTgt = true, multi = false, summary = '', helpText = '' }: any) => {
-  const { onDel, isDark } = useNodeLogic(id);
+  const { onDel, isDark, activePreviewId } = useNodeLogic(id);
   const [showHelp, setShowHelp] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
+  
+  const isPreview = activePreviewId === id;
+  const borderClass = isPreview 
+    ? `border-blue-500 ring-2 ring-blue-500 shadow-[0_0_15px_rgba(59,130,246,0.5)] ${isDark ? 'ring-offset-[#1a1a1a]' : 'ring-offset-gray-50'} ring-offset-2`
+    : (isDark ? 'border-[#444]' : 'border-gray-300');
 
   return (
-    <div className={`${isDark ? 'bg-[#252526] border-[#444]' : 'bg-white border-gray-300'} border rounded-xl shadow-2xl min-w-[260px] pb-1 relative group/node transition-colors`}>
+    <div className={`${isDark ? 'bg-[#252526]' : 'bg-white'} border ${borderClass} rounded-xl shadow-2xl min-w-[260px] pb-1 relative group/node transition-colors`}>
       <button onClick={(e) => { e.stopPropagation(); onDel(); }} className="absolute -top-3 -right-3 bg-blue-600 hover:bg-blue-500 text-white rounded-full w-6 h-6 flex items-center justify-center font-bold text-xs opacity-0 group-hover/node:opacity-100 transition-opacity shadow-lg z-20 nodrag">
         <span className="flex items-center justify-center w-3 h-3">{Icons.Close}</span>
       </button>
@@ -716,7 +732,9 @@ const WebSourceNode = memo(({ id, data }: any) => {
       <div className="space-y-3">
          <div className="flex flex-col gap-2">
            <input type="text" className={`w-full text-[10px] p-2 border rounded outline-none nodrag transition-colors ${isDark ? 'bg-[#1a1a1a] border-[#444] text-white focus:border-emerald-500' : 'bg-white border-gray-300 text-gray-800 focus:border-emerald-500'}`} placeholder="https://example.com/api/data" value={url} onChange={e=>setUrl(e.target.value)} />
-           <button onClick={handleFetch} disabled={loading || !url} className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-[10px] font-bold py-2 rounded nodrag shadow-sm transition-all active:scale-95">{loading ? '取得中...' : '🌐 データ取得'}</button>
+           <button onClick={handleFetch} disabled={loading || !url} className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-[10px] font-bold py-2 rounded nodrag shadow-sm transition-all active:scale-95 flex items-center justify-center gap-1.5">
+             {loading ? '取得中...' : <><span className="flex items-center justify-center">{Icons.Web}</span> データ取得</>}
+           </button>
          </div>
          <div className="space-y-1">
            <label className={`text-[8px] ${isDark ? 'text-[#888]' : 'text-gray-500'} font-bold uppercase tracking-widest`}>Data Type</label>
@@ -755,8 +773,8 @@ const PasteNode = memo(({ id, data }: any) => {
            value={text} 
            onChange={e=>setText(e.target.value)} 
          />
-         <button onClick={handleApply} disabled={!text} className="w-full bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white text-[10px] font-bold py-2 rounded nodrag shadow-sm transition-all active:scale-95">
-           📝 データを適用
+         <button onClick={handleApply} disabled={!text} className="w-full bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white text-[10px] font-bold py-2 rounded nodrag shadow-sm transition-all active:scale-95 flex items-center justify-center gap-1.5">
+           <span className="flex items-center justify-center">{Icons.Paste}</span> データを適用
          </button>
       </div>
     </NodeWrap>
@@ -844,73 +862,38 @@ const MinusNode = memo(({ id, data }: any) => {
   );
 });
 
-// ★ AI Node 実装
-const AINode = memo(({ id, data }: any) => {
-  const { onChg, isDark } = useNodeLogic(id);
-  const { globalApiKey } = useContext(AppContext);
-  const [prmt, setPrmt] = useState(data.aiPrompt || '');
-  const [isSug, setIsSug] = useState(false);
-  const [isGen, setIsGen] = useState(false);
-  const [sugs, setSugs] = useState<string[]>([]);
-
-  const getSug = async () => {
-    if (!globalApiKey) { alert("画面上部からGroq API Keyを設定してください"); return; }
-    setIsSug(true);
-    try {
-      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${globalApiKey}` },
-        body: JSON.stringify({
-          model: 'gemma2-9b-it',
-          messages: [{ role: 'user', content: 'データ整形のための短い指示(20文字以内)を3つ、カンマ区切りで提案して。例: 売上を数値化,空白を0で埋める' }]
-        })
-      });
-      const d = await res.json();
-      const txt = d.choices[0].message.content;
-      setSugs(txt.split(',').map((s: string) => s.trim()).filter((s:string) => s));
-    } catch (e) { alert("提案の取得に失敗しました"); } finally { setIsSug(false); }
-  };
-
-  const genCode = async () => {
-    if (!globalApiKey) { alert("画面上部からGroq API Keyを設定してください"); return; }
-    setIsGen(true);
-    try {
-      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${globalApiKey}` },
-        body: JSON.stringify({
-          model: 'gemma2-9b-it',
-          messages: [{ role: 'user', content: `以下の指示を満たすJavaScriptのデータ変換コードを書いてください(input配列を受け取りout配列を返す)。\n指示: ${prmt}\nコードのみを出力してください。` }]
-        })
-      });
-      const d = await res.json();
-      const c = d.choices[0].message.content;
-      const m = c.match(/(?:javascript|js)?\n([\s\S]*?)\n```/);
-      onChg('jsCode', m ? m[1] : c.replace(new RegExp('```javascript', 'g'), '').replace(new RegExp('```', 'g'), '').trim());
-    } catch (e) { alert("コード生成エラー"); } finally { setIsGen(false); }
-  };
+// ★ Calculate ノード (四則演算と文字結合)
+const CalculateNode = memo(({ id, data }: any) => {
+  const { fData, onChg, isDark } = useNodeLogic(id);
+  const summary = data.newColName ? `Add ${data.newColName}` : '';
+  const inputClass = `w-full text-[10px] p-2 border rounded outline-none transition-colors nodrag ${isDark ? 'bg-[#1a1a1a] border-[#444] text-[#ccc] hover:border-teal-400' : 'bg-white border-gray-300 text-gray-700 hover:border-teal-500'}`;
 
   return (
-    <NodeWrap id={id} title="Gemma Clean" col={isDark ? "text-fuchsia-400" : "text-fuchsia-600"} helpText="AIに自然言語で指示を出して、データを整形するためのJavaScriptコードを自動生成・実行します。">
-      <div className="space-y-3">
-        <div className="space-y-1">
-          <div className="flex justify-between items-center">
-            <label className={`text-[8px] font-bold uppercase tracking-widest ${isDark ? 'text-fuchsia-400' : 'text-fuchsia-600'}`}>✨ Prompt to Gemma</label>
-            <button onClick={getSug} disabled={isSug} className={`text-[8px] px-2 py-0.5 rounded disabled:opacity-50 transition-colors nodrag ${isDark ? 'bg-fuchsia-900/30 text-fuchsia-300 hover:bg-fuchsia-600/50' : 'bg-fuchsia-50 text-fuchsia-600 hover:bg-fuchsia-100'}`}>{isSug ? '...' : '💡 提案'}</button>
-          </div>
-          {sugs.length > 0 && <div className="flex flex-wrap gap-1 mb-2">{sugs.map((s, i) => <span key={i} onClick={() => { setPrmt(s); onChg('aiPrompt', s); }} className={`text-[9px] border px-2 py-1 rounded cursor-pointer transition-colors nodrag ${isDark ? 'bg-[#2a1a2a] border-fuchsia-500/30 text-fuchsia-300 hover:bg-[#3a2a3a]' : 'bg-fuchsia-50 border-fuchsia-200 text-fuchsia-700 hover:bg-fuchsia-100'}`}>{s}</span>)}</div>}
-          <textarea className={`w-full text-[10px] p-2 border rounded h-16 outline-none transition-colors custom-scrollbar nodrag ${isDark ? 'bg-[#2a1a2a] border-fuchsia-500/50 text-white focus:border-fuchsia-400' : 'bg-white border-gray-300 text-gray-800 focus:border-fuchsia-500'}`} placeholder="例: 売上列のカンマを削除" value={prmt} onChange={(e) => setPrmt(e.target.value)} onBlur={() => onChg('aiPrompt', prmt)} />
-        </div>
-        <button onClick={genCode} disabled={isGen || !prmt} className="w-full bg-fuchsia-600 hover:bg-fuchsia-500 disabled:opacity-50 text-white text-[10px] font-bold py-2 rounded shadow-sm transition-all active:scale-95 nodrag">{isGen ? '生成中...' : '⚙️ コードを生成'}</button>
-        <div className="space-y-1">
-          <label className={`text-[8px] font-bold uppercase tracking-widest flex justify-between ${isDark ? 'text-[#888]' : 'text-gray-500'}`}><span>Generated JS</span></label>
-          <textarea className={`w-full text-[10px] font-mono p-2 border rounded h-20 outline-none custom-scrollbar transition-colors nodrag ${isDark ? 'bg-[#1a1a1a] text-[#a5b4fc] border-[#444] focus:border-fuchsia-400' : 'bg-gray-50 text-indigo-600 border-gray-300 focus:border-fuchsia-500'}`} value={data.jsCode || ''} onChange={(e) => onChg('jsCode', e.target.value)} />
+    <NodeWrap id={id} title="Calculate" col={isDark ? "text-teal-400" : "text-teal-600"} summary={summary} helpText="2つの列を使って計算（足し算や文字列結合など）を行い、新しい列として追加します。">
+      <div className="space-y-2">
+        <select className={inputClass} value={data.colA || ''} onChange={(e) => onChg('colA', e.target.value)}>
+          <option value="">Column A...</option>
+          {fData.incomingHeaders?.map((h: string) => <option key={h} value={h}>{h}</option>)}
+        </select>
+        <select className={`w-full text-[10px] p-2 border rounded outline-none font-bold transition-colors nodrag ${isDark ? 'bg-[#1a1a1a] border-[#444] text-white hover:border-teal-400' : 'bg-white border-gray-300 text-gray-900 hover:border-teal-500'}`} value={data.operator || 'add'} onChange={(e) => onChg('operator', e.target.value)}>
+          <option value="add">➕ 足し算 (Add)</option>
+          <option value="sub">➖ 引き算 (Subtract)</option>
+          <option value="mul">✖️ 掛け算 (Multiply)</option>
+          <option value="div">➗ 割り算 (Divide)</option>
+          <option value="concat">🔗 文字結合 (Concat)</option>
+        </select>
+        <select className={inputClass} value={data.colB || ''} onChange={(e) => onChg('colB', e.target.value)}>
+          <option value="">Column B...</option>
+          {fData.incomingHeaders?.map((h: string) => <option key={h} value={h}>{h}</option>)}
+        </select>
+        <div className={`space-y-1 mt-2 pt-2 border-t ${isDark ? 'border-[#444]' : 'border-gray-200'}`}>
+          <label className={`text-[8px] uppercase tracking-widest font-bold ${isDark ? 'text-[#888]' : 'text-gray-500'}`}>New Column Name</label>
+          <NodeInput className={`w-full text-[10px] p-2 border rounded outline-none transition-colors ${isDark ? 'bg-[#1a1a1a] border-[#444] text-white focus:border-teal-400' : 'bg-white border-gray-300 text-gray-900 focus:border-teal-500'}`} placeholder="e.g. Total Price" value={data.newColName || ''} onChange={(v: any) => onChg('newColName', v)} />
         </div>
       </div>
     </NodeWrap>
   );
 });
-
 
 const SortNode = memo(({ id, data }: any) => {
   const { fData, onChg, isDark } = useNodeLogic(id);
@@ -1094,7 +1077,8 @@ const ChartNode = memo(({ id, data }: any) => {
   );
 });
 
-const nodeTypesObj = { dataNode: DataNode, folderSourceNode: FolderSourceNode, webSourceNode: WebSourceNode, pasteNode: PasteNode, unionNode: UnionNode, joinNode: JoinNode, vlookupNode: VlookupNode, minusNode: MinusNode, groupByNode: GroupByNode, sortNode: SortNode, transformNode: TransformNode, selectNode: SelectNode, filterNode: FilterNode, chartNode: ChartNode, aiNode: AINode };
+// ★ Calculate Nodeを追加
+const nodeTypesObj = { dataNode: DataNode, folderSourceNode: FolderSourceNode, webSourceNode: WebSourceNode, pasteNode: PasteNode, unionNode: UnionNode, joinNode: JoinNode, vlookupNode: VlookupNode, minusNode: MinusNode, groupByNode: GroupByNode, sortNode: SortNode, transformNode: TransformNode, calculateNode: CalculateNode, selectNode: SelectNode, filterNode: FilterNode, chartNode: ChartNode };
 
 const NodeNavigator = ({ tList, nodes }: { tList: any[], nodes: CustomNode[] }) => {
   const { focusNode, theme } = useContext(AppContext);
@@ -1133,12 +1117,12 @@ const NodeNavigator = ({ tList, nodes }: { tList: any[], nodes: CustomNode[] }) 
         else if (n.type === 'filterNode' && n.data.filterCol) subText = `${n.data.filterCol} ${n.data.matchType} ${n.data.filterVal || ''}`;
         else if (n.type === 'chartNode' && n.data.chartType) subText = `${n.data.chartType} chart`;
         else if (n.type === 'transformNode' && (n.data.targetCol || n.data.command === 'remove_duplicates')) subText = `${n.data.command === 'case_when' ? 'CASE WHEN' : (n.data.command || '...')} on ${n.data.targetCol || 'All'}`;
+        else if (n.type === 'calculateNode' && n.data.newColName) subText = `Add ${n.data.newColName}`;
         else if (n.type === 'sortNode' && n.data.sortCol) subText = `${n.data.sortCol} ${n.data.sortOrder}`;
         else if (n.type === 'groupByNode' && n.data.groupCol) subText = `By ${n.data.groupCol}`;
         else if (n.type === 'selectNode' && n.data.selectedColumns) subText = `${n.data.selectedColumns.length} cols selected`;
         else if (n.type === 'joinNode' || n.type === 'unionNode' || n.type === 'minusNode') subText = "Merge Data";
         else if (n.type === 'vlookupNode' && n.data.targetCol) subText = `Add ${n.data.targetCol}`;
-        else if (n.type === 'aiNode') subText = "AI Generation";
         else if ((n.type === 'dataNode' || n.type === 'folderSourceNode') && n.data.useFirstRowAsHeader) subText = "Setup Required";
 
         return (
@@ -1176,6 +1160,9 @@ const FlowBuilder = () => {
   const [isSaveLoadOpen, setIsSaveLoadOpen] = useState(false);
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
   const [isSqlModalOpen, setIsSqlModalOpen] = useState(false);
+  
+  const [showTutorial, setShowTutorial] = useState(() => !localStorage.getItem('bi-architect-visited'));
+  
   const [savedFlows, setSavedFlows] = useState<any[]>([]);
   const [bottomHeight, setBottomHeight] = useState(300);
   const [isDragging, setIsDragging] = useState(false);
@@ -1183,20 +1170,13 @@ const FlowBuilder = () => {
   const [isAutoCameraMove, setIsAutoCameraMove] = useState(true);
   const [previewNodeId, setPreviewNodeId] = useState<string | null>(null);
 
-  // ★ AI Node連携用のステート
-  const [aiPrompt, setAiPrompt] = useState('');
-  const [globalApiKey, setGlobalApiKey] = useState('');
-  const [isAiGenerating, setIsAiGenerating] = useState(false);
-  
-  // ★ テーマ管理
   const [theme, setTheme] = useState<'light' | 'dark'>('dark');
+  
   useEffect(() => {
     const savedTheme = localStorage.getItem('bi-architect-theme') as 'light' | 'dark';
     if (savedTheme === 'light' || savedTheme === 'dark') setTheme(savedTheme);
     const localFlows = localStorage.getItem('bi-architect-flows');
     if (localFlows) setSavedFlows(JSON.parse(localFlows));
-    const savedKey = localStorage.getItem('bi-architect-api-key');
-    if (savedKey) setGlobalApiKey(savedKey);
   }, []);
 
   useEffect(() => {
@@ -1215,35 +1195,9 @@ const FlowBuilder = () => {
     });
   }, []);
 
-  const handleSaveKey = (e: React.ChangeEvent<HTMLInputElement>) => { 
-    setGlobalApiKey(e.target.value); 
-    localStorage.setItem('bi-architect-api-key', e.target.value); 
-  };
-
-  const handleAIGen = () => {
-    if (!aiPrompt) return; setIsAiGenerating(true);
-    setTimeout(() => {
-      let newNodes: Node[] = [], newEdges: Edge[] = [], currX = 50, prevId: string | null = null;
-      const addN = (type: string, data: any = {}) => {
-        const id = `n-ai-${Date.now()}-${Math.floor(Math.random()*1000)}`;
-        newNodes.push({ id, type, position: { x: currX, y: 150 }, data: { useFirstRowAsHeader: true, ...data } });
-        if (prevId) newEdges.push({ id: `e-${prevId}-${id}`, source: prevId, target: id, animated: true, style: { stroke: '#38bdf8', strokeWidth: 4 } });
-        prevId = id; currX += 280;
-      };
-      addN('dataNode'); 
-      const p = aiPrompt.toLowerCase();
-      if (p.match(/抽出|消|整形|大文字|小文字|半角|全角/)) addN('aiNode', { aiPrompt: 'データを整形して' });
-      if (p.match(/置換|置き換え/)) addN('transformNode', { command: 'replace' });
-      if (p.match(/結合|マージ|join|くっつけ/)) addN('joinNode');
-      if (p.match(/ユニオン|追加|縦/)) addN('unionNode');
-      if (p.match(/差|マイナス|引いて/)) addN('minusNode');
-      if (p.match(/フィルタ|絞り込|条件|以上|以下/)) addN('filterNode');
-      if (p.match(/選択|選んで|のみ/)) addN('selectNode');
-      if (p.match(/集計|まとめ|ごと|平均|合計|カウント/)) addN('groupByNode', { aggType: p.match(/平均/) ? 'avg' : p.match(/カウント|件数/) ? 'count' : 'sum' });
-      if (p.match(/ソート|並び|順/)) addN('sortNode', { sortOrder: p.match(/降順|大きい順|高い順/) ? 'desc' : 'asc' });
-      if (p.match(/グラフ|可視化|チャート|図/)) addN('chartNode', { chartType: p.match(/折れ線|推移|ライン/) ? 'line' : 'bar' });
-      _setNodes(newNodes); _setEdges(newEdges); setAiPrompt(''); setIsAiGenerating(false);
-    }, 1200);
+  const closeTutorial = () => {
+    setShowTutorial(false);
+    localStorage.setItem('bi-architect-visited', '1');
   };
 
   const focusNode = useCallback((nodeId: string, force: boolean = false) => {
@@ -1307,19 +1261,19 @@ const FlowBuilder = () => {
     }); return map;
   }, [sHash, workbooks]); // eslint-disable-line
 
-  const final = useMemo(() => {
-    let targetNodeId = previewNodeId;
-    if (!targetNodeId || !nodes.find(n => n.id === targetNodeId)) {
-      const term = nodes.find(n => !edges.some(e => e.source === n.id));
-      targetNodeId = term?.id || "";
-    }
-    
-    if (!targetNodeId) return { data: [], headers: [], chartConfig: null };
+  const activePreviewId = useMemo(() => {
+    if (previewNodeId && nodes.find(n => n.id === previewNodeId)) return previewNodeId;
+    const term = nodes.find(n => !edges.some(e => e.source === n.id));
+    return term?.id || null;
+  }, [previewNodeId, nodes, edges]);
 
-    const result = calcData(targetNodeId, nodes, edges, workbooks);
-    const targetNode = nodes.find(n => n.id === targetNodeId);
+  const final = useMemo(() => {
+    if (!activePreviewId) return { data: [], headers: [], chartConfig: null };
+
+    const result = calcData(activePreviewId, nodes, edges, workbooks);
+    const targetNode = nodes.find(n => n.id === activePreviewId);
     return { ...result, chartConfig: targetNode?.type === 'chartNode' ? targetNode.data : null };
-  }, [sHash, workbooks, previewNodeId]); // eslint-disable-line
+  }, [sHash, workbooks, activePreviewId]); // eslint-disable-line
 
   const dashboardsData = useMemo(() => {
     return nodes.filter(n => n.type === 'chartNode').map(n => {
@@ -1347,71 +1301,71 @@ const FlowBuilder = () => {
     { t: 'groupByNode', l: 'Group By', i: Icons.GroupBy, c: 'text-blue-500 dark:text-blue-400', desc: '指定したキーでデータをグループ化し、合計や件数を集計します。' },
     { t: 'sortNode', l: 'Sort', i: Icons.Sort, c: 'text-blue-500 dark:text-blue-400', desc: '指定した列を基準に、データを昇順・降順に並び替えます。' },
     { t: 'transformNode', l: 'Transform', i: Icons.Transform, c: 'text-blue-500 dark:text-blue-400', desc: 'データの内容を書き換えたり、型変換や0埋めなどを行うクレンジングノードです。' },
-    { t: 'aiNode', l: 'Gemma Clean', i: '✨', c: 'text-fuchsia-500 dark:text-fuchsia-400', desc: 'AIにプロンプトを投げてデータ整形のJavaScriptを自動生成・適用します。' },
+    { t: 'calculateNode', l: 'Calculate', i: Icons.Calculate, c: 'text-teal-500 dark:text-teal-400', desc: '2つの列の値を計算（足し算、文字結合など）し、新しい列として追加します。' },
     { t: 'selectNode', l: 'Select', i: Icons.Select, c: 'text-blue-500 dark:text-blue-400', desc: '必要な列(カラム)だけを選んで残し、不要な列を削除します。' },
     { t: 'filterNode', l: 'Filter', i: Icons.Filter, c: 'text-blue-500 dark:text-blue-400', desc: '条件に一致する行だけを抽出します。(例: 売上1000以上)' },
     { t: 'chartNode', l: 'Visualizer', i: Icons.Chart, c: 'text-blue-500 dark:text-blue-400', desc: 'データをグラフ化します。Dashboardタブで一覧表示できます。' }
   ];
 
   const isDark = theme === 'dark';
+  
+  const btnClasses = isSidebarOpen ? 'p-3 gap-4' : 'p-2 justify-center w-10 h-10';
 
   return (
-    <AppContext.Provider value={{ workbooks, setWorkbooks, setRangeModalNode, nodeFlowData, isAutoCameraMove, focusNode, theme, globalApiKey }}>
+    <AppContext.Provider value={{ workbooks, setWorkbooks, setRangeModalNode, nodeFlowData, isAutoCameraMove, focusNode, theme, activePreviewId: activePreviewId as string | null }}>
       <div className={`h-screen w-screen flex flex-col font-sans overflow-hidden transition-colors ${isDark ? 'bg-[#1a1a1a]' : 'bg-gray-50'}`}>
         <GlobalStyle />
         <div className={`border-b px-6 py-3 flex justify-between items-center z-40 gap-4 no-print transition-colors ${isDark ? 'bg-[#181818] border-[#333] shadow-md' : 'bg-white border-gray-200 shadow-sm'}`}>
           <h1 className={`text-[13px] font-bold tracking-[0.5em] uppercase flex items-center gap-3 shrink-0 ${isDark ? 'text-white' : 'text-gray-800'}`}>
             <span className="text-blue-500 w-4 h-4 flex items-center justify-center">{Icons.Diamond}</span>
-            BI Architect
+            Visual Data Prep
           </h1>
           
-          <div className="flex-1 max-w-xl relative mx-4 hidden md:block">
-            <input type="text" placeholder="例: 売上順にソートして棒グラフを作って" 
-                   className={`w-full text-[11px] px-10 py-2 rounded-full outline-none transition-all border ${isDark ? 'bg-[#1e1e1e] border-[#444] text-white focus:border-blue-500/80' : 'bg-gray-100 border-gray-300 text-gray-800 focus:border-blue-500'}`} 
-                   value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) handleAIGen(); }} />
-            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-blue-500 text-base">🤖</span>
+          <div className="flex-1 flex justify-center">
+            <div className={`px-4 py-1.5 rounded-full text-[10px] tracking-widest font-bold flex items-center gap-2 border ${isDark ? 'bg-[#1e1e1e] border-[#333] text-[#aaa]' : 'bg-gray-50 border-gray-200 text-gray-500'}`}>
+              <span className="text-blue-500">{Icons.Diamond}</span> ノードを繋いで構築 <span className={`mx-1 ${isDark ? 'text-[#555]' : 'text-gray-400'}`}>|</span> 接続線は右クリックで削除
+            </div>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
-            <input type="password" placeholder="🔑 Groq API Key" 
-                   className={`text-[10px] px-3 py-2 rounded-lg outline-none w-32 md:w-48 shadow-sm transition-colors border ${isDark ? 'bg-[#1e1e1e] border-fuchsia-500/30 focus:border-fuchsia-500 text-fuchsia-300' : 'bg-fuchsia-50 border-fuchsia-200 focus:border-fuchsia-400 text-fuchsia-600'}`} 
-                   value={globalApiKey} onChange={handleSaveKey} />
+          <div className="flex items-center gap-3 shrink-0">
+            <button onClick={() => setShowTutorial(true)} className={`text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-2 shadow-sm active:scale-95 transition-colors border ${isDark ? 'bg-[#252526] hover:bg-[#333] border-[#444] text-[#666]' : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-600'}`} title="Tutorial">
+              <span className="flex items-center justify-center text-lg">{Icons.Help}</span>
+            </button>
 
             <button onClick={toggleTheme} className={`text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-2 shadow-sm active:scale-95 transition-colors border ${isDark ? 'bg-[#252526] hover:bg-[#333] border-[#444] text-[#666]' : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-600'}`} title="Toggle Theme">
               <span className="flex items-center justify-center text-lg">{isDark ? Icons.Sun : Icons.Moon}</span>
             </button>
 
-            <button onClick={() => setIsAutoCameraMove(!isAutoCameraMove)} className={`text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-2 shadow-sm active:scale-95 transition-colors border ${isDark ? 'bg-[#252526] hover:bg-[#333] border-[#444]' : 'bg-gray-50 hover:bg-gray-100 border-gray-200'} ${isAutoCameraMove ? (isDark ? 'text-blue-400' : 'text-blue-500') : (isDark ? 'text-[#666]' : 'text-gray-500')}`} title="Auto Camera Focus">
-              <span className="flex items-center justify-center gap-1.5">{Icons.Focus}</span>
+            <button onClick={() => setIsAutoCameraMove(!isAutoCameraMove)} className={`text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-1.5 shadow-sm active:scale-95 transition-colors border ${isDark ? 'bg-[#252526] hover:bg-[#333] border-[#444]' : 'bg-gray-50 hover:bg-gray-100 border-gray-200'} ${isAutoCameraMove ? (isDark ? 'text-blue-400' : 'text-blue-500') : (isDark ? 'text-[#666]' : 'text-gray-500')}`} title="Auto Camera Focus">
+              <span className="flex items-center justify-center gap-1">{Icons.Focus}</span> {isAutoCameraMove ? 'CAMERA FOCUS ON' : 'CAMERA FOCUS OFF'}
             </button>
             
             <button onClick={() => setIsSqlModalOpen(true)} className={`text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-1.5 shadow-sm active:scale-95 transition-colors border hidden md:flex ${isDark ? 'bg-[#252526] hover:bg-blue-900/30 border-[#444] hover:border-blue-500/50 text-[#aaa] hover:text-blue-400' : 'bg-gray-50 hover:bg-blue-50 border-gray-200 hover:border-blue-300 text-gray-600 hover:text-blue-600'}`}>
-              <span className="flex items-center justify-center gap-1">{Icons.Code} SQL</span>
+              <span className="flex items-center justify-center gap-1">{Icons.Code}</span> SQL
             </button>
             <button onClick={() => setIsResetModalOpen(true)} className={`text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-1.5 shadow-sm active:scale-95 transition-colors border hidden md:flex ${isDark ? 'bg-[#252526] hover:bg-red-900/30 border-[#444] hover:border-red-500/50 text-[#aaa] hover:text-red-400' : 'bg-gray-50 hover:bg-red-50 border-gray-200 hover:border-red-300 text-gray-600 hover:text-red-600'}`}>
-              <span className="flex items-center justify-center gap-1">{Icons.Trash} RESET</span>
+              <span className="flex items-center justify-center gap-1">{Icons.Trash}</span> RESET
             </button>
             <button onClick={() => setIsSaveLoadOpen(true)} className={`text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-1.5 shadow-sm active:scale-95 transition-colors border ${isDark ? 'bg-[#252526] hover:bg-[#333] border-[#444] text-white' : 'bg-gray-800 hover:bg-gray-700 border-gray-700 text-white'}`}>
-              <span className="flex items-center justify-center gap-1">{Icons.Save} / {Icons.Folder}</span>
+              <span className="flex items-center justify-center gap-1">{Icons.Save}</span> / <span className="flex items-center justify-center gap-1">{Icons.Folder}</span> PROJECTS
             </button>
           </div>
         </div>
         <div className="flex-1 flex overflow-hidden relative no-print">
-          <aside className={`border-r z-20 flex flex-col transition-all duration-300 ease-in-out ${isDark ? 'bg-[#181818] border-[#333]' : 'bg-white border-gray-200'} ${isSidebarOpen ? 'w-64 py-4 pl-4 pr-2' : 'w-16 p-2 items-center'}`}>
+          <aside className={`border-r z-20 flex flex-col transition-all duration-300 ease-in-out ${isDark ? 'bg-[#181818] border-[#333]' : 'bg-white border-gray-200'} ${isSidebarOpen ? 'w-64 py-4 pl-4 pr-2' : 'w-16 py-4 px-2 items-center'}`}>
             <div className={`flex items-center ${isSidebarOpen ? 'justify-between mb-4 pr-2' : 'justify-center mb-6'} border-b pb-2 ${isDark ? 'border-[#333]' : 'border-gray-200'}`}>
               {isSidebarOpen && <div className={`text-[10px] font-bold tracking-[0.3em] uppercase ${isDark ? 'text-white' : 'text-gray-800'}`}>Toolbox</div>}
               <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className={`p-1 rounded transition-colors flex items-center justify-center w-6 h-6 ${isDark ? 'text-[#888] hover:text-white hover:bg-[#333]' : 'text-gray-500 hover:text-gray-800 hover:bg-gray-100'}`}>
                 {isSidebarOpen ? Icons.ArrowLeft : Icons.ArrowRight}
               </button>
             </div>
-            <div className={`flex flex-col ${isSidebarOpen ? 'gap-3 pr-2' : 'gap-4'} overflow-y-auto overflow-x-hidden pb-10 custom-scrollbar`}>
+            <div className={`flex flex-col ${isSidebarOpen ? 'gap-3 pr-2' : 'gap-4 pr-1 w-full items-center'} overflow-y-auto overflow-x-hidden pb-10 custom-scrollbar`}>
               {tList.map(item => {
-                // Tailwind dynamic classes check 
-                const hoverBorderClass = isDark ? (item.t === 'aiNode' ? 'hover:border-fuchsia-500' : item.t === 'vlookupNode' ? 'hover:border-pink-500' : item.t === 'minusNode' ? 'hover:border-rose-500' : item.t === 'webSourceNode' ? 'hover:border-emerald-500' : item.t === 'folderSourceNode' ? 'hover:border-indigo-500' : item.t === 'pasteNode' ? 'hover:border-orange-500' : 'hover:border-blue-500') 
-                                              : (item.t === 'aiNode' ? 'hover:border-fuchsia-400' : item.t === 'vlookupNode' ? 'hover:border-pink-400' : item.t === 'minusNode' ? 'hover:border-rose-400' : item.t === 'webSourceNode' ? 'hover:border-emerald-400' : item.t === 'folderSourceNode' ? 'hover:border-indigo-400' : item.t === 'pasteNode' ? 'hover:border-orange-400' : 'hover:border-blue-400');
+                const hoverBorderClass = isDark ? (item.t === 'calculateNode' ? 'hover:border-teal-500' : item.t === 'vlookupNode' ? 'hover:border-pink-500' : item.t === 'minusNode' ? 'hover:border-rose-500' : item.t === 'webSourceNode' ? 'hover:border-emerald-500' : item.t === 'folderSourceNode' ? 'hover:border-indigo-500' : item.t === 'pasteNode' ? 'hover:border-orange-500' : 'hover:border-blue-500') 
+                                              : (item.t === 'calculateNode' ? 'hover:border-teal-400' : item.t === 'vlookupNode' ? 'hover:border-pink-400' : item.t === 'minusNode' ? 'hover:border-rose-400' : item.t === 'webSourceNode' ? 'hover:border-emerald-400' : item.t === 'folderSourceNode' ? 'hover:border-indigo-400' : item.t === 'pasteNode' ? 'hover:border-orange-400' : 'hover:border-blue-400');
                 return (
-                <div key={item.t} className={`relative group/btn rounded-xl cursor-grab flex items-center transition-all shadow-sm active:scale-95 border ${isDark ? 'bg-[#252526] border-[#333]' : 'bg-gray-50 border-gray-200'} ${hoverBorderClass} ${isSidebarOpen ? 'p-3 gap-4' : 'p-3 justify-center w-12 h-12'}`} onDragStart={(e) => e.dataTransfer.setData('application/reactflow', item.t)} draggable>
-                  <div className={`${item.c} text-lg group-hover/btn:scale-125 transition-transform ${isSidebarOpen ? '' : 'text-xl'}`}>{item.i}</div>
+                <div key={item.t} className={`relative group/btn rounded-xl cursor-grab flex items-center transition-all shadow-sm active:scale-95 border ${isDark ? 'bg-[#252526] border-[#333]' : 'bg-gray-50 border-gray-200'} ${hoverBorderClass} ${btnClasses}`} onDragStart={(e) => e.dataTransfer.setData('application/reactflow', item.t)} draggable>
+                  <div className={`${item.c} text-lg group-hover/btn:scale-125 transition-transform flex items-center justify-center ${isSidebarOpen ? '' : 'text-xl'}`}>{item.i}</div>
                   {isSidebarOpen && <span className={`text-[10px] font-bold uppercase tracking-wider truncate ${isDark ? 'text-[#888] group-hover/btn:text-white' : 'text-gray-600 group-hover/btn:text-gray-900'}`}>{item.l}</span>}
                   <div className={`absolute left-full ml-4 top-1/2 -translate-y-1/2 w-56 text-[11px] p-3 rounded-lg border opacity-0 group-hover/btn:opacity-100 pointer-events-none transition-opacity z-50 shadow-xl hidden md:block normal-case leading-relaxed ${isDark ? 'bg-[#111] text-[#ccc] border-[#444]' : 'bg-white text-gray-700 border-gray-200'}`}>
                     <div className={`font-bold mb-1 tracking-widest ${isDark ? 'text-white' : 'text-gray-900'}`}>{item.l}</div>
@@ -1422,7 +1376,6 @@ const FlowBuilder = () => {
             </div>
           </aside>
           <div className="flex-1 relative transition-colors">
-            {isAiGenerating && <div className={`absolute inset-0 z-50 flex items-center justify-center flex-col gap-4 backdrop-blur-sm ${isDark ? 'bg-[#1e1e1e]/60' : 'bg-white/60'}`}><div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div></div>}
             <ReactFlow 
               nodes={nodes} 
               edges={edges} 
@@ -1472,9 +1425,9 @@ const FlowBuilder = () => {
               {isPreviewOpen && ['table', 'chart', 'dashboard'].map(tab => (
                 <button key={tab} onClick={() => setPreviewTab(tab as any)} className={`text-[11px] font-bold uppercase tracking-[0.3em] pb-1 border-b-2 transition-all mt-1 ${previewTab === tab ? (isDark ? 'text-blue-400 border-blue-400' : 'text-blue-600 border-blue-600') : (isDark ? 'text-[#555] border-transparent hover:text-white' : 'text-gray-400 border-transparent hover:text-gray-800')}`}>
                   <span className="flex items-center gap-2">
-                    {tab === 'table' && <>{Icons.Select} Data Table</>}
-                    {tab === 'chart' && <>{Icons.Chart} Visual Insight</>}
-                    {tab === 'dashboard' && <>{Icons.Dashboard} Dashboard</>}
+                    {tab === 'table' && <><span className="flex items-center justify-center">{Icons.Select}</span> Data Table</>}
+                    {tab === 'chart' && <><span className="flex items-center justify-center">{Icons.Chart}</span> Visual Insight</>}
+                    {tab === 'dashboard' && <><span className="flex items-center justify-center">{Icons.Dashboard}</span> Dashboard</>}
                   </span>
                 </button>
               ))}
@@ -1539,7 +1492,7 @@ const FlowBuilder = () => {
                           <CartesianGrid strokeDasharray="3 3" stroke={isDark ? "#333" : "#e5e7eb"} vertical={false} />
                           <XAxis dataKey={final.chartConfig.xAxis} stroke={isDark ? "#555" : "#9ca3af"} tick={{ fill: isDark ? '#888' : '#6b7280', fontSize: 11 }} tickLine={false} axisLine={false} dy={10} />
                           <YAxis stroke={isDark ? "#555" : "#9ca3af"} tick={{ fill: isDark ? '#888' : '#6b7280', fontSize: 11 }} tickLine={false} axisLine={false} dx={-10} />
-                          <Tooltip cursor={{fill: isDark ? '#252526' : '#f3f4f6'}} contentStyle={{ backgroundColor: isDark ? '#1a1a1a' : '#fff', border: isDark ? '1px solid #444' : '1px solid #e5e7eb', fontSize: '11px', borderRadius: '8px' }} labelStyle={{ color: isDark ? '#fff' : '#1f2937', fontWeight: 'bold', paddingBottom: '4px' }} itemStyle={{ color: '#60a5fa' }} />
+                          <Tooltip contentStyle={{ backgroundColor: isDark ? '#1a1a1a' : '#fff', border: isDark ? '1px solid #444' : '1px solid #e5e7eb', fontSize: '11px', borderRadius: '8px' }} labelStyle={{ color: isDark ? '#fff' : '#1f2937', fontWeight: 'bold', paddingBottom: '4px' }} itemStyle={{ color: '#60a5fa' }} />
                           <Line type="monotone" dataKey={final.chartConfig.yAxis} stroke="#3b82f6" strokeWidth={3} dot={{ r: 4, fill: '#3b82f6', strokeWidth: 0 }} activeDot={{ r: 6 }} />
                         </LineChart>
                       ) : (
@@ -1565,7 +1518,7 @@ const FlowBuilder = () => {
                     dashboardsData.map(d => (
                       <div key={d.id} className={`p-4 rounded-2xl border flex flex-col h-[320px] transition-colors ${isDark ? 'bg-[#1e1e1e] border-[#333] shadow-lg hover:border-[#444]' : 'bg-white border-gray-200 shadow-md hover:border-gray-300'}`}>
                         <div className={`text-[10px] font-bold uppercase tracking-wider mb-4 border-b pb-2 flex justify-between items-center ${isDark ? 'text-[#888] border-[#333]' : 'text-gray-500 border-gray-100'}`}>
-                          <span>{d.config.chartType === 'line' ? '📈 Line Chart' : '📊 Bar Chart'}</span>
+                          <span className="flex items-center gap-1.5"><span className="flex items-center justify-center w-4 h-4">{Icons.Chart}</span> {d.config.chartType === 'line' ? 'Line Chart' : 'Bar Chart'}</span>
                           <span className={isDark ? 'text-[#555]' : 'text-gray-400'}>{d.config.yAxis} by {d.config.xAxis}</span>
                         </div>
                         <div className="flex-1 min-h-0">
@@ -1599,6 +1552,64 @@ const FlowBuilder = () => {
             </div>
           )}
         </div>
+
+        {/* ★ チュートリアルモーダル */}
+        {showTutorial && (
+          <div className={`fixed inset-0 z-[400] flex items-center justify-center p-8 backdrop-blur-md no-print ${isDark ? 'bg-black/90' : 'bg-gray-900/50'}`}>
+            <div className={`border rounded-2xl shadow-2xl w-[600px] overflow-hidden flex flex-col transition-colors ${isDark ? 'bg-[#1e1e1e] border-[#444]' : 'bg-white border-gray-200'}`}>
+              <div className={`p-4 border-b flex justify-between items-center transition-colors ${isDark ? 'bg-[#1a1a1a] border-[#444]' : 'bg-gray-50 border-gray-200'}`}>
+                <h2 className={`text-[12px] font-bold uppercase tracking-[0.4em] flex items-center gap-2 ${isDark ? 'text-white' : 'text-gray-800'}`}>
+                  <span className="text-blue-500 w-4 h-4 flex items-center justify-center">{Icons.Help}</span> 
+                  Visual Data Prep
+                </h2>
+                <button onClick={closeTutorial} className={`transition-colors text-xl flex items-center justify-center w-6 h-6 ${isDark ? 'text-[#666] hover:text-white' : 'text-gray-500 hover:text-gray-800'}`}>
+                  <span className="w-4 h-4 block flex items-center justify-center">{Icons.Close}</span>
+                </button>
+              </div>
+
+              <div className={`p-8 flex flex-col items-center space-y-6 transition-colors ${isDark ? 'bg-[#1a1a1a]' : 'bg-gray-50'}`}>
+                <div className={`text-[11px] leading-relaxed text-center ${isDark ? 'text-[#aaa]' : 'text-gray-600'}`}>
+                  ”ノード”を繋いで視覚的にデータを作る、データ整形ツールです。<br/><br/>基本的な使い方は以下の3ステップです。
+                </div>
+                
+                <div className="w-full space-y-4 text-left">
+                  <div className={`p-4 rounded-xl border flex items-center gap-4 transition-colors ${isDark ? 'bg-[#1e1e1e] border-[#444] hover:border-blue-500/50' : 'bg-white border-gray-200 hover:border-blue-300'}`}>
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg shrink-0 border transition-colors ${isDark ? 'bg-[#252526] text-blue-400 border-[#444]' : 'bg-gray-50 text-blue-600 border-gray-200 shadow-sm'}`}>
+                      <span className="w-5 h-5 flex items-center justify-center">{Icons.Source}</span>
+                    </div>
+                    <div className="flex-1">
+                      <div className={`text-[10px] font-bold uppercase tracking-widest mb-1 ${isDark ? 'text-white' : 'text-gray-800'}`}>Step 1: Add Nodes</div>
+                      <p className={`text-[10px] leading-relaxed ${isDark ? 'text-[#888]' : 'text-gray-500'}`}>左の<strong>Toolbox</strong>から、SOURCE(ファイル読み込み)やUNION(結合)などの「ノード」を画面へドラッグ＆ドロップします。</p>
+                    </div>
+                  </div>
+
+                  <div className={`p-4 rounded-xl border flex items-center gap-4 transition-colors ${isDark ? 'bg-[#1e1e1e] border-[#444] hover:border-pink-500/50' : 'bg-white border-gray-200 hover:border-pink-300'}`}>
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg shrink-0 border transition-colors ${isDark ? 'bg-[#252526] text-pink-400 border-[#444]' : 'bg-gray-50 text-pink-600 border-gray-200 shadow-sm'}`}>
+                      <span className="w-5 h-5 flex items-center justify-center">{Icons.Join}</span>
+                    </div>
+                    <div className="flex-1">
+                      <div className={`text-[10px] font-bold uppercase tracking-widest mb-1 ${isDark ? 'text-white' : 'text-gray-800'}`}>Step 2: Connect Flow</div>
+                      <p className={`text-[10px] leading-relaxed ${isDark ? 'text-[#888]' : 'text-gray-500'}`}>ノード同士の<strong>青い○（ハンドル）</strong>をマウスで繋ぐと、データが左から右へと流れて処理されます。</p>
+                    </div>
+                  </div>
+
+                  <div className={`p-4 rounded-xl border flex items-center gap-4 transition-colors ${isDark ? 'bg-[#1e1e1e] border-[#444] hover:border-emerald-500/50' : 'bg-white border-gray-200 hover:border-emerald-300'}`}>
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg shrink-0 border transition-colors ${isDark ? 'bg-[#252526] text-emerald-400 border-[#444]' : 'bg-gray-50 text-emerald-600 border-gray-200 shadow-sm'}`}>
+                      <span className="w-5 h-5 flex items-center justify-center">{Icons.Dashboard}</span>
+                    </div>
+                    <div className="flex-1">
+                      <div className={`text-[10px] font-bold uppercase tracking-widest mb-1 ${isDark ? 'text-white' : 'text-gray-800'}`}>Step 3: Preview & Export</div>
+                      <p className={`text-[10px] leading-relaxed ${isDark ? 'text-[#888]' : 'text-gray-500'}`}>画面下部の<strong>Preview</strong>に処理結果がリアルタイムで表示されます。Excel出力やSQL変換も可能です。</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <button onClick={closeTutorial} className={`w-full p-4 text-[11px] font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-colors border-t ${isDark ? 'bg-[#252526] text-blue-400 border-[#444] hover:bg-[#333]' : 'bg-gray-50 text-blue-600 border-gray-200 hover:bg-gray-100'}`}>
+                <span className="w-4 h-4 flex items-center justify-center"></span> 使ってみる
+              </button>
+            </div>
+          </div>
+        )}
 
         <SqlModal 
           isOpen={isSqlModalOpen} 
@@ -1719,6 +1730,19 @@ const SqlModal = ({ isOpen, onClose, nodes, edges, onImport }: any) => {
              }
              select = select === "*" ? `*, ${func} AS \`${n.data.targetCol}\`` : `${select}, ${func} AS \`${n.data.targetCol}\``;
           }
+        }
+      }
+      
+      if (n.type === 'calculateNode' && n.data.colA && n.data.colB && n.data.newColName) {
+        let func = '';
+        if (n.data.operator === 'add') func = `(COALESCE(\`${n.data.colA}\`, 0) + COALESCE(\`${n.data.colB}\`, 0))`;
+        else if (n.data.operator === 'sub') func = `(COALESCE(\`${n.data.colA}\`, 0) - COALESCE(\`${n.data.colB}\`, 0))`;
+        else if (n.data.operator === 'mul') func = `(COALESCE(\`${n.data.colA}\`, 0) * COALESCE(\`${n.data.colB}\`, 0))`;
+        else if (n.data.operator === 'div') func = `(COALESCE(\`${n.data.colA}\`, 0) / NULLIF(COALESCE(\`${n.data.colB}\`, 0), 0))`;
+        else if (n.data.operator === 'concat') func = `CONCAT(COALESCE(\`${n.data.colA}\`, ''), COALESCE(\`${n.data.colB}\`, ''))`;
+        
+        if (func) {
+          select = select === "*" ? `*, ${func} AS \`${n.data.newColName}\`` : `${select}, ${func} AS \`${n.data.newColName}\``;
         }
       }
 
@@ -1918,7 +1942,7 @@ const RangeSelectorModal = ({ isOpen, onClose, workbook, currentSheet, onRangesC
         <div className={`p-4 border-b flex flex-col font-sans transition-colors ${isDark ? 'bg-[#1a1a1a] border-[#444]' : 'bg-gray-50 border-gray-200'}`}>
           <div className="flex justify-between items-center mb-2">
             <h2 className={`text-[12px] font-bold uppercase tracking-[0.4em] flex items-center gap-2 ${isDark ? 'text-white' : 'text-gray-800'}`}>
-              <span className="text-blue-500">{Icons.Select}</span> Visual Range Selection
+              <span className="text-blue-500">{Icons.Select}</span> 抽出範囲の選択
             </h2>
             <div className="flex items-center gap-8">
               <div className="flex items-center gap-3">
@@ -1932,7 +1956,7 @@ const RangeSelectorModal = ({ isOpen, onClose, workbook, currentSheet, onRangesC
           </div>
           <p className={`text-[10px] leading-relaxed ${isDark ? 'text-[#888]' : 'text-gray-600'}`}>
             🖱️ 抽出したいデータの範囲を<strong>マウスでドラッグして選択</strong>してください。（複数の範囲を選択することも可能です）<br/>
-            ✅ 選択後、右側のパネルで<strong>「1行目をヘッダーとして使用する (First row as Header)」</strong>オプションをオンにすると、最初の行が列名として認識されます。
+            ✅ 選択後、右側のパネルで<strong>「1行目をヘッダーにする」</strong>オプションをオンにすると、最初の行が列名として認識されます。
           </p>
         </div>
         <div className="flex-1 flex overflow-hidden">
@@ -1972,7 +1996,7 @@ const RangeSelectorModal = ({ isOpen, onClose, workbook, currentSheet, onRangesC
             <h3 className={`text-[10px] font-bold uppercase border-b pb-3 ${isDark ? 'text-[#888] border-[#444]' : 'text-gray-600 border-gray-200'}`}>Selection Settings</h3>
             <label className="flex items-center gap-3 cursor-pointer group">
               <input type="checkbox" checked={uHead} onChange={(e) => setUHead(e.target.checked)} className="w-4 h-4 accent-blue-500" />
-              <span className={`text-[11px] uppercase font-bold transition-colors ${isDark ? 'text-[#ccc] group-hover:text-white' : 'text-gray-700 group-hover:text-gray-900'}`}>First row as Header</span>
+              <span className={`text-[11px] uppercase font-bold transition-colors ${isDark ? 'text-[#ccc] group-hover:text-white' : 'text-gray-700 group-hover:text-gray-900'}`}>1行目をヘッダーにする</span>
             </label>
             <div className="flex-1 overflow-auto space-y-3 pr-2 custom-scrollbar">
               {sRanges.map((rs, i) => (
@@ -1987,7 +2011,7 @@ const RangeSelectorModal = ({ isOpen, onClose, workbook, currentSheet, onRangesC
                 </div>
               ))}
             </div>
-            <button onClick={() => {onRangesConfirm(sRanges, uHead); onClose();}} className="bg-blue-600 hover:bg-blue-500 py-3.5 rounded-xl text-[11px] font-bold text-white uppercase shadow-xl active:scale-95 transition-all">Apply Selection</button>
+            <button onClick={() => {onRangesConfirm(sRanges, uHead); onClose();}} className="bg-blue-600 hover:bg-blue-500 py-3.5 rounded-xl text-[11px] font-bold text-white uppercase shadow-xl active:scale-95 transition-all">選択を適用</button>
           </div>
         </div>
       </div>
