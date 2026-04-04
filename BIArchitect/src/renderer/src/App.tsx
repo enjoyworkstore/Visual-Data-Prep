@@ -22,6 +22,8 @@ const AppContext = createContext<AppContextType>({} as AppContextType);
 
 const GlobalStyle = () => (
   <style>{`
+    @import url('https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@300;400;500;700&display=swap');
+    body { font-family: 'Zen Kaku Gothic New', sans-serif; font-weight: 300; }
     ::-webkit-scrollbar { width: 8px; height: 8px; }
     .dark ::-webkit-scrollbar-track { background: #1a1a1a; }
     .dark ::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
@@ -71,8 +73,8 @@ const GlobalStyle = () => (
   `}</style>
 );
 
-const IconSvg = ({ children }: { children: React.ReactNode }) => (
-  <svg viewBox="0 0 24 24" width="1em" height="1em" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round">{children}</svg>
+const IconSvg = ({ children, className = "w-[1em] h-[1em]" }: any) => (
+  <svg viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" className={className}>{children}</svg>
 );
 
 const Icons = {
@@ -109,8 +111,136 @@ const Icons = {
   ChevronUp: <IconSvg><polyline points="18 15 12 9 6 15"/></IconSvg>,
   Code: <IconSvg><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></IconSvg>,
   Copy: <IconSvg><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></IconSvg>,
-  Focus: <IconSvg><circle cx="12" cy="12" r="3"/><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/></IconSvg>
+  Focus: <IconSvg><circle cx="12" cy="12" r="3"/><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/></IconSvg>,
+  Download: <IconSvg><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></IconSvg>,
+  Database: <IconSvg><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></IconSvg>,
+  Zap: <IconSvg><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></IconSvg>,
+  Layout: <IconSvg><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></IconSvg>
 };
+
+// ★ LandingPage: ツールに合わせて白ベースでコンパクトなデザインに変更
+const LandingPage = () => {
+  return (
+    <div className="min-h-screen bg-gray-50 text-gray-800 font-sans selection:bg-gray-200">
+      <nav className="border-b border-gray-200 bg-white/80 backdrop-blur-md sticky top-0 z-50">
+        <div className="max-w-5xl mx-auto px-6 py-4 flex justify-between items-center">
+          <div className="flex items-center gap-3">
+            <span className="text-gray-800 w-5 h-5 flex items-center justify-center">{Icons.Diamond}</span>
+            <span className="text-sm font-bold tracking-[0.3em] text-gray-800 uppercase">VISUAL DATA PREP</span>
+          </div>
+          <div className="flex items-center gap-6">
+            <a href="#features" className="text-xs font-bold text-gray-500 hover:text-gray-900 transition-colors hidden md:block tracking-wider uppercase">Features</a>
+            <a href="#how-it-works" className="text-xs font-bold text-gray-500 hover:text-gray-900 transition-colors hidden md:block tracking-wider uppercase">Workflow</a>
+            <a href="#/app" className="bg-gray-800 hover:bg-gray-700 text-white text-xs font-bold px-5 py-2.5 rounded-lg tracking-widest transition-all shadow-sm flex items-center gap-2">
+              ツールを開く <span className="w-3 h-3 flex items-center justify-center">{Icons.ArrowRight}</span>
+            </a>
+          </div>
+        </div>
+      </nav>
+
+      <section className="relative pt-20 pb-16 overflow-hidden">
+        <div className="max-w-5xl mx-auto px-6 relative z-10 text-center">
+          <h1 className="text-4xl md:text-5xl font-bold text-gray-900 tracking-tight leading-tight mb-4">
+            No-Code Data Reshaping <br className="hidden md:block" />
+            <span className="text-gray-600">
+              & Visual SQL Building
+            </span>
+          </h1>
+          <p className="text-sm md:text-base text-gray-600 max-w-2xl mx-auto mb-8 leading-relaxed">
+            ドラッグ＆ドロップの直感的な操作で、CSVやWeb APIなどのデータを自由自在に結合・整形・計算。複雑なデータ処理パイプラインやSQLクエリを誰でも手軽に構築できるツールです。
+          </p>
+          <div className="flex justify-center items-center gap-4">
+            <a href="#/app" className="bg-gray-800 hover:bg-gray-700 text-white text-sm font-bold px-8 py-3.5 rounded-xl tracking-widest transition-all shadow-md flex items-center gap-2 hover:scale-105">
+               今すぐ使ってみる <span className="w-4 h-4 flex items-center justify-center">{Icons.ArrowRight}</span>
+            </a>
+          </div>
+
+          <div className="mt-16 relative mx-auto max-w-4xl">
+            <div className="rounded-xl border border-gray-200 bg-white p-1.5 shadow-xl relative">
+              {/* ★ Vite環境変数を用いた確実な画像パスに変更 */}
+              <img 
+                src={`${import.meta.env.BASE_URL}screenshot.png`} 
+                alt="Visual Data Prep Screenshot" 
+                className="w-full rounded-lg border border-gray-100 object-cover h-[auto] min-h-[250px] bg-gray-100"
+              />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="features" className="py-16 bg-white border-t border-gray-200">
+        <div className="max-w-5xl mx-auto px-6">
+          <div className="text-center mb-12">
+            <h2 className="text-xs font-bold tracking-[0.3em] text-gray-500 mb-2 uppercase">Features</h2>
+            <h3 className="text-2xl font-bold text-gray-900">手軽なデータプレパレーション</h3>
+          </div>
+          
+          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
+            {[
+              { i: Icons.Layout, t: "直感的なノーコードUI", d: "ノードをキャンバスに配置して線で繋ぐだけ。プログラミングの知識は一切不要です。" },
+              { i: Icons.Database, t: "多彩なデータソース", d: "ローカルのCSV/Excelだけでなく、フォルダ自動監視やコピペ入力にも対応。" },
+              { i: Icons.Zap, t: "強力なクレンジング", d: "VLOOKUP的な結合、文字列抽出、ゼロ埋め、四則演算まで豊富な変換ノードを搭載。" },
+              { i: Icons.Code, t: "SQLの相互変換", d: "作成したフローからSELECT文を自動生成。逆にSQLからノードを自動配置することも可能。" }
+            ].map((f, idx) => (
+              <div key={idx} className="bg-gray-50 border border-gray-200 p-5 rounded-xl hover:border-gray-400 transition-colors">
+                <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center text-gray-800 mb-3 border border-gray-200 shadow-sm">
+                  <span className="w-5 h-5 flex items-center justify-center">{f.i}</span>
+                </div>
+                <h4 className="text-sm font-bold text-gray-900 mb-1.5">{f.t}</h4>
+                <p className="text-xs text-gray-600 leading-relaxed">{f.d}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section id="how-it-works" className="py-16 bg-gray-50 border-t border-gray-200">
+        <div className="max-w-5xl mx-auto px-6">
+          <div className="text-center mb-12">
+            <h2 className="text-xs font-bold tracking-[0.3em] text-gray-500 mb-2 uppercase">Workflow</h2>
+            <h3 className="text-2xl font-bold text-gray-900">使い方：3ステップで完了</h3>
+          </div>
+
+          <div className="grid md:grid-cols-3 gap-6">
+            {[
+              { s: "Step 1", t: "Add Nodes", d: "左側のToolboxから、読み込み(Source)や結合(Join)などのノードをドラッグ＆ドロップで配置します。" },
+              { s: "Step 2", t: "Connect Flow", d: "ノード同士の端子をマウスで繋ぎます。データが左から右へと水のように流れて処理されます。" },
+              { s: "Step 3", t: "Preview & Export", d: "画面下部に結果がリアルタイム表示されます。グラフ化や、CSV・Excelへのエクスポートが可能です。" }
+            ].map((step, idx) => (
+              <div key={idx} className="relative">
+                {idx !== 2 && <div className="hidden md:block absolute top-6 left-1/2 w-full h-[1px] border-t border-dashed border-gray-300 z-0"></div>}
+                <div className="bg-white border border-gray-200 p-6 rounded-xl relative z-10 h-full shadow-sm">
+                  <div className="text-gray-800 font-bold tracking-widest text-[10px] mb-1.5">{step.s}</div>
+                  <h4 className="text-base font-bold text-gray-900 mb-2 uppercase">{step.t}</h4>
+                  <p className="text-xs text-gray-600 leading-relaxed">{step.d}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ★ LP下部の文言を削除し、シンプルにボタンだけにする */}
+      <section className="py-20 bg-white border-t border-gray-200">
+        <div className="max-w-3xl mx-auto px-6 text-center">
+          <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center text-gray-800 mx-auto mb-6 border border-gray-200">
+            <span className="w-8 h-8 flex items-center justify-center">{Icons.Diamond}</span>
+          </div>
+          
+          <a href="#/app" className="inline-flex bg-gray-800 hover:bg-gray-700 text-white text-sm font-bold px-8 py-3.5 rounded-xl tracking-widest transition-all shadow-md items-center gap-2 hover:scale-105">
+            ツールを起動する <span className="w-4 h-4 flex items-center justify-center">{Icons.ArrowRight}</span>
+          </a>
+        </div>
+      </section>
+
+      <footer className="border-t border-gray-200 bg-gray-50 py-6 text-center">
+        <p className="text-[10px] font-bold tracking-widest text-gray-500 uppercase">
+          &copy; {new Date().getFullYear()} Visual Data Prep. All rights reserved.
+        </p>
+      </footer>
+    </div>
+  );
+}
 
 const CAMERA_OFFSET_X = 250;
 
@@ -274,16 +404,34 @@ const calcData = (nId: string, nodes: CustomNode[], edges: Edge[], wbs: any): { 
       return { data: vData, headers: [...rA.headers, newColName] };
     }
 
+    // ★ Join ロジックの修正（多対多、1対多の対応）
     const { keyA, keyB, joinType = 'inner' } = node.data;
     if (!keyA || !keyB) return rA;
 
     let jnd: any[] = [];
     if (joinType === 'inner') {
-      rA.data.forEach(a => { const b = rB.data.find(r => String(r[keyB as string]) === String(a[keyA as string])); if (b) jnd.push({ ...a, ...b }); });
+      rA.data.forEach(a => {
+        const matches = rB.data.filter(r => String(r[keyB as string]) === String(a[keyA as string]));
+        matches.forEach(b => jnd.push({ ...a, ...b }));
+      });
     } else if (joinType === 'left') {
-      rA.data.forEach(a => { const b = rB.data.find(r => String(r[keyB as string]) === String(a[keyA as string])) || {}; jnd.push({ ...a, ...b }); });
+      rA.data.forEach(a => {
+        const matches = rB.data.filter(r => String(r[keyB as string]) === String(a[keyA as string]));
+        if (matches.length > 0) {
+          matches.forEach(b => jnd.push({ ...a, ...b }));
+        } else {
+          jnd.push({ ...a });
+        }
+      });
     } else if (joinType === 'right') {
-      rB.data.forEach(b => { const a = rA.data.find(r => String(r[keyA as string]) === String(b[keyB as string])) || {}; jnd.push({ ...a, ...b }); });
+      rB.data.forEach(b => {
+        const matches = rA.data.filter(r => String(r[keyA as string]) === String(b[keyB as string]));
+        if (matches.length > 0) {
+          matches.forEach(a => jnd.push({ ...a, ...b }));
+        } else {
+          jnd.push({ ...b });
+        }
+      });
     }
     const newHeaders = [...new Set([...rA.headers, ...rB.headers])];
     return { data: jnd, headers: newHeaders };
@@ -330,7 +478,8 @@ const calcData = (nId: string, nodes: CustomNode[], edges: Edge[], wbs: any): { 
         if (!grps[k]) grps[k] = { [groupCol as string]: k, _v: 0, _c: 0 };
         grps[k]._v += Number(r[aggCol as string]) || 0; grps[k]._c++;
       });
-      out = Object.values(grps).map((g: any) => ({ [groupCol as string]: g[groupCol as string], [aggCol as string]: aggType === 'count' ? g._c : (g._v / (g._c || 1)) }));
+      // ★ Group By ロジックの修正: count なら _c, sum なら _v を返す
+      out = Object.values(grps).map((g: any) => ({ [groupCol as string]: g[groupCol as string], [aggCol as string]: aggType === 'count' ? g._c : g._v }));
       h = [groupCol, aggCol];
     }
   }
@@ -732,7 +881,7 @@ const WebSourceNode = memo(({ id, data }: any) => {
       <div className="space-y-3">
          <div className="flex flex-col gap-2">
            <input type="text" className={`w-full text-[10px] p-2 border rounded outline-none nodrag transition-colors ${isDark ? 'bg-[#1a1a1a] border-[#444] text-white focus:border-emerald-500' : 'bg-white border-gray-300 text-gray-800 focus:border-emerald-500'}`} placeholder="https://example.com/api/data" value={url} onChange={e=>setUrl(e.target.value)} />
-           <button onClick={handleFetch} disabled={loading || !url} className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-[10px] font-bold py-2 rounded nodrag shadow-sm transition-all active:scale-95 flex items-center justify-center gap-1.5">
+           <button onClick={handleFetch} disabled={loading || !url} className={`w-full bg-gray-800 hover:bg-gray-700 disabled:opacity-50 text-white text-[10px] font-bold py-2 rounded nodrag shadow-sm transition-all active:scale-95 flex items-center justify-center gap-1.5`}>
              {loading ? '取得中...' : <><span className="flex items-center justify-center">{Icons.Web}</span> データ取得</>}
            </button>
          </div>
@@ -773,7 +922,7 @@ const PasteNode = memo(({ id, data }: any) => {
            value={text} 
            onChange={e=>setText(e.target.value)} 
          />
-         <button onClick={handleApply} disabled={!text} className="w-full bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white text-[10px] font-bold py-2 rounded nodrag shadow-sm transition-all active:scale-95 flex items-center justify-center gap-1.5">
+         <button onClick={handleApply} disabled={!text} className={`w-full bg-gray-800 hover:bg-gray-700 disabled:opacity-50 text-white text-[10px] font-bold py-2 rounded nodrag shadow-sm transition-all active:scale-95 flex items-center justify-center gap-1.5`}>
            <span className="flex items-center justify-center">{Icons.Paste}</span> データを適用
          </button>
       </div>
@@ -862,7 +1011,6 @@ const MinusNode = memo(({ id, data }: any) => {
   );
 });
 
-// ★ Calculate ノード (四則演算と文字結合)
 const CalculateNode = memo(({ id, data }: any) => {
   const { fData, onChg, isDark } = useNodeLogic(id);
   const summary = data.newColName ? `Add ${data.newColName}` : '';
@@ -1077,7 +1225,6 @@ const ChartNode = memo(({ id, data }: any) => {
   );
 });
 
-// ★ Calculate Nodeを追加
 const nodeTypesObj = { dataNode: DataNode, folderSourceNode: FolderSourceNode, webSourceNode: WebSourceNode, pasteNode: PasteNode, unionNode: UnionNode, joinNode: JoinNode, vlookupNode: VlookupNode, minusNode: MinusNode, groupByNode: GroupByNode, sortNode: SortNode, transformNode: TransformNode, calculateNode: CalculateNode, selectNode: SelectNode, filterNode: FilterNode, chartNode: ChartNode };
 
 const NodeNavigator = ({ tList, nodes }: { tList: any[], nodes: CustomNode[] }) => {
@@ -1316,10 +1463,10 @@ const FlowBuilder = () => {
       <div className={`h-screen w-screen flex flex-col font-sans overflow-hidden transition-colors ${isDark ? 'bg-[#1a1a1a]' : 'bg-gray-50'}`}>
         <GlobalStyle />
         <div className={`border-b px-6 py-3 flex justify-between items-center z-40 gap-4 no-print transition-colors ${isDark ? 'bg-[#181818] border-[#333] shadow-md' : 'bg-white border-gray-200 shadow-sm'}`}>
-          <h1 className={`text-[13px] font-bold tracking-[0.5em] uppercase flex items-center gap-3 shrink-0 ${isDark ? 'text-white' : 'text-gray-800'}`}>
+          <a href="#/" className={`text-[13px] font-bold tracking-[0.5em] uppercase flex items-center gap-3 shrink-0 hover:opacity-80 transition-opacity ${isDark ? 'text-white' : 'text-gray-800'}`} title="Back to Home">
             <span className="text-blue-500 w-4 h-4 flex items-center justify-center">{Icons.Diamond}</span>
             Visual Data Prep
-          </h1>
+          </a>
           
           <div className="flex-1 flex justify-center">
             <div className={`px-4 py-1.5 rounded-full text-[10px] tracking-widest font-bold flex items-center gap-2 border ${isDark ? 'bg-[#1e1e1e] border-[#333] text-[#aaa]' : 'bg-gray-50 border-gray-200 text-gray-500'}`}>
@@ -1328,25 +1475,25 @@ const FlowBuilder = () => {
           </div>
 
           <div className="flex items-center gap-3 shrink-0">
-            <button onClick={() => setShowTutorial(true)} className={`text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-2 shadow-sm active:scale-95 transition-colors border ${isDark ? 'bg-[#252526] hover:bg-[#333] border-[#444] text-[#666]' : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-600'}`} title="Tutorial">
+            <button onClick={() => setShowTutorial(true)} className={`text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-2 shadow-sm active:scale-95 transition-colors border ${isDark ? 'bg-[#252526] hover:bg-[#333] border-[#444] text-[#666]' : 'bg-white hover:bg-gray-50 border-gray-200 text-gray-600'}`} title="Tutorial">
               <span className="flex items-center justify-center text-lg">{Icons.Help}</span>
             </button>
 
-            <button onClick={toggleTheme} className={`text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-2 shadow-sm active:scale-95 transition-colors border ${isDark ? 'bg-[#252526] hover:bg-[#333] border-[#444] text-[#666]' : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-600'}`} title="Toggle Theme">
+            <button onClick={toggleTheme} className={`text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-2 shadow-sm active:scale-95 transition-colors border ${isDark ? 'bg-[#252526] hover:bg-[#333] border-[#444] text-[#666]' : 'bg-white hover:bg-gray-50 border-gray-200 text-gray-600'}`} title="Toggle Theme">
               <span className="flex items-center justify-center text-lg">{isDark ? Icons.Sun : Icons.Moon}</span>
             </button>
 
-            <button onClick={() => setIsAutoCameraMove(!isAutoCameraMove)} className={`text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-1.5 shadow-sm active:scale-95 transition-colors border ${isDark ? 'bg-[#252526] hover:bg-[#333] border-[#444]' : 'bg-gray-50 hover:bg-gray-100 border-gray-200'} ${isAutoCameraMove ? (isDark ? 'text-blue-400' : 'text-blue-500') : (isDark ? 'text-[#666]' : 'text-gray-500')}`} title="Auto Camera Focus">
-              <span className="flex items-center justify-center gap-1">{Icons.Focus}</span> {isAutoCameraMove ? 'CAMERA FOCUS ON' : 'CAMERA FOCUS OFF'}
+            <button onClick={() => setIsAutoCameraMove(!isAutoCameraMove)} className={`text-[10px] px-3 py-2 rounded-lg font-bold tracking-widest flex items-center gap-1.5 shadow-sm active:scale-95 transition-colors border ${isDark ? 'bg-[#252526] hover:bg-[#333] border-[#444]' : 'bg-white hover:bg-gray-50 border-gray-200'} ${isAutoCameraMove ? (isDark ? 'text-blue-400' : 'text-blue-500') : (isDark ? 'text-[#666]' : 'text-gray-500')}`} title="Auto Camera Focus">
+              <span className="flex items-center justify-center gap-1">{Icons.Focus}</span> CAMERA FOCUS: {isAutoCameraMove ? 'ON' : 'OFF'}
             </button>
             
-            <button onClick={() => setIsSqlModalOpen(true)} className={`text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-1.5 shadow-sm active:scale-95 transition-colors border hidden md:flex ${isDark ? 'bg-[#252526] hover:bg-blue-900/30 border-[#444] hover:border-blue-500/50 text-[#aaa] hover:text-blue-400' : 'bg-gray-50 hover:bg-blue-50 border-gray-200 hover:border-blue-300 text-gray-600 hover:text-blue-600'}`}>
+            <button onClick={() => setIsSqlModalOpen(true)} className={`text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-1.5 shadow-sm active:scale-95 transition-colors border hidden md:flex ${isDark ? 'bg-[#252526] hover:bg-blue-900/30 border-[#444] hover:border-blue-500/50 text-[#aaa] hover:text-blue-400' : 'bg-white hover:bg-gray-50 border-gray-200 text-gray-600'}`}>
               <span className="flex items-center justify-center gap-1">{Icons.Code}</span> SQL
             </button>
-            <button onClick={() => setIsResetModalOpen(true)} className={`text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-1.5 shadow-sm active:scale-95 transition-colors border hidden md:flex ${isDark ? 'bg-[#252526] hover:bg-red-900/30 border-[#444] hover:border-red-500/50 text-[#aaa] hover:text-red-400' : 'bg-gray-50 hover:bg-red-50 border-gray-200 hover:border-red-300 text-gray-600 hover:text-red-600'}`}>
+            <button onClick={() => setIsResetModalOpen(true)} className={`text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-1.5 shadow-sm active:scale-95 transition-colors border hidden md:flex ${isDark ? 'bg-[#252526] hover:bg-red-900/30 border-[#444] hover:border-red-500/50 text-[#aaa] hover:text-red-400' : 'bg-white hover:bg-gray-50 border-gray-200 text-gray-600'}`}>
               <span className="flex items-center justify-center gap-1">{Icons.Trash}</span> RESET
             </button>
-            <button onClick={() => setIsSaveLoadOpen(true)} className={`text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-1.5 shadow-sm active:scale-95 transition-colors border ${isDark ? 'bg-[#252526] hover:bg-[#333] border-[#444] text-white' : 'bg-gray-800 hover:bg-gray-700 border-gray-700 text-white'}`}>
+            <button onClick={() => setIsSaveLoadOpen(true)} className={`text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-1.5 shadow-sm active:scale-95 transition-colors border ${isDark ? 'bg-[#252526] hover:bg-[#333] border-[#444] text-white' : 'bg-gray-800 hover:bg-gray-700 border-gray-800 text-white'}`}>
               <span className="flex items-center justify-center gap-1">{Icons.Save}</span> / <span className="flex items-center justify-center gap-1">{Icons.Folder}</span> PROJECTS
             </button>
           </div>
@@ -1364,7 +1511,7 @@ const FlowBuilder = () => {
                 const hoverBorderClass = isDark ? (item.t === 'calculateNode' ? 'hover:border-teal-500' : item.t === 'vlookupNode' ? 'hover:border-pink-500' : item.t === 'minusNode' ? 'hover:border-rose-500' : item.t === 'webSourceNode' ? 'hover:border-emerald-500' : item.t === 'folderSourceNode' ? 'hover:border-indigo-500' : item.t === 'pasteNode' ? 'hover:border-orange-500' : 'hover:border-blue-500') 
                                               : (item.t === 'calculateNode' ? 'hover:border-teal-400' : item.t === 'vlookupNode' ? 'hover:border-pink-400' : item.t === 'minusNode' ? 'hover:border-rose-400' : item.t === 'webSourceNode' ? 'hover:border-emerald-400' : item.t === 'folderSourceNode' ? 'hover:border-indigo-400' : item.t === 'pasteNode' ? 'hover:border-orange-400' : 'hover:border-blue-400');
                 return (
-                <div key={item.t} className={`relative group/btn rounded-xl cursor-grab flex items-center transition-all shadow-sm active:scale-95 border ${isDark ? 'bg-[#252526] border-[#333]' : 'bg-gray-50 border-gray-200'} ${hoverBorderClass} ${btnClasses}`} onDragStart={(e) => e.dataTransfer.setData('application/reactflow', item.t)} draggable>
+                <div key={item.t} className={`relative group/btn rounded-xl cursor-grab flex items-center transition-all shadow-sm active:scale-95 border ${isDark ? 'bg-[#252526] border-[#333]' : 'bg-white border-gray-200'} ${hoverBorderClass} ${btnClasses}`} onDragStart={(e) => e.dataTransfer.setData('application/reactflow', item.t)} draggable>
                   <div className={`${item.c} text-lg group-hover/btn:scale-125 transition-transform flex items-center justify-center ${isSidebarOpen ? '' : 'text-xl'}`}>{item.i}</div>
                   {isSidebarOpen && <span className={`text-[10px] font-bold uppercase tracking-wider truncate ${isDark ? 'text-[#888] group-hover/btn:text-white' : 'text-gray-600 group-hover/btn:text-gray-900'}`}>{item.l}</span>}
                   <div className={`absolute left-full ml-4 top-1/2 -translate-y-1/2 w-56 text-[11px] p-3 rounded-lg border opacity-0 group-hover/btn:opacity-100 pointer-events-none transition-opacity z-50 shadow-xl hidden md:block normal-case leading-relaxed ${isDark ? 'bg-[#111] text-[#ccc] border-[#444]' : 'bg-white text-gray-700 border-gray-200'}`}>
@@ -1408,7 +1555,7 @@ const FlowBuilder = () => {
         
         <div 
           style={{ height: isPreviewOpen ? bottomHeight : 48, transition: isDragging ? 'none' : 'height 0.3s cubic-bezier(0.4, 0, 0.2, 1)' }} 
-          className={`flex flex-col border-t z-30 relative transition-colors ${isDark ? 'bg-[#1a1a1a] border-[#333] shadow-[0_-10px_40px_rgba(0,0,0,0.5)]' : 'bg-gray-50 border-gray-200 shadow-[0_-10px_40px_rgba(0,0,0,0.1)]'}`}
+          className={`flex flex-col border-t z-30 relative transition-colors ${isDark ? 'bg-[#1a1a1a] border-[#333] shadow-[0_-10px_40px_rgba(0,0,0,0.5)]' : 'bg-white border-gray-200 shadow-[0_-10px_40px_rgba(0,0,0,0.1)]'}`}
         >
           {isPreviewOpen && (
             <div 
@@ -1417,7 +1564,7 @@ const FlowBuilder = () => {
               title="Drag to resize"
             />
           )}
-          <div className={`px-6 py-2 flex justify-between items-center border-b h-[48px] shrink-0 no-print transition-colors ${isDark ? 'bg-[#252526] border-[#333]' : 'bg-white border-gray-200'}`}>
+          <div className={`px-6 py-2 flex justify-between items-center border-b h-[48px] shrink-0 no-print transition-colors ${isDark ? 'bg-[#252526] border-[#333]' : 'bg-gray-50 border-gray-200'}`}>
             <div className="flex items-center gap-4">
               <button onClick={() => setIsPreviewOpen(!isPreviewOpen)} className={`p-1 rounded transition-colors mr-2 flex items-center justify-center w-6 h-6 ${isDark ? 'text-[#888] hover:text-white hover:bg-[#333]' : 'text-gray-500 hover:text-gray-800 hover:bg-gray-100'}`}>
                 {isPreviewOpen ? Icons.ChevronDown : Icons.ChevronUp}
@@ -1468,15 +1615,16 @@ const FlowBuilder = () => {
             </div>
           </div>
           {isPreviewOpen && (
-            <div className={`flex-1 overflow-auto print-preview-area transition-colors ${isDark ? 'bg-[#1e1e1e]' : 'bg-gray-50'}`}>
+            <div className={`flex-1 overflow-auto print-preview-area transition-colors ${isDark ? 'bg-[#1e1e1e]' : 'bg-white'}`}>
               {previewTab === 'table' && (
                 <table className="w-full text-left text-[11px] whitespace-nowrap border-collapse">
-                  <thead className={`sticky top-0 border-b z-10 shadow-sm transition-colors ${isDark ? 'bg-[#1a1a1a] border-[#333]' : 'bg-gray-100 border-gray-200'}`}>
+                  <thead className={`sticky top-0 border-b z-10 shadow-sm transition-colors ${isDark ? 'bg-[#1a1a1a] border-[#333]' : 'bg-gray-50 border-gray-200'}`}>
                     <tr>{final.headers.map((h, i) => <th key={i} className={`px-5 py-3 font-bold border-r uppercase tracking-wider ${isDark ? 'text-[#888] border-[#333]' : 'text-gray-600 border-gray-200'}`}>{h}</th>)}</tr>
                   </thead>
                   <tbody>
-                    {final.data.slice(0, 100).map((row, i) => (
-                      <tr key={i} className={`transition-colors border-b ${isDark ? 'hover:bg-[#252526] border-[#222]' : 'hover:bg-white border-gray-200'}`}>
+                    {/* ★ 最大表示行数を 100 -> 80 に変更しました */}
+                    {final.data.slice(0, 80).map((row, i) => (
+                      <tr key={i} className={`transition-colors border-b ${isDark ? 'hover:bg-[#252526] border-[#222]' : 'hover:bg-gray-50 border-gray-200'}`}>
                         {final.headers.map((h, j) => <td key={j} className={`px-5 py-2 border-r font-mono ${isDark ? 'text-[#ccc] border-[#222]' : 'text-gray-800 border-gray-200'}`}>{row[h]}</td>)}
                       </tr>
                     ))}
@@ -1567,14 +1715,14 @@ const FlowBuilder = () => {
                 </button>
               </div>
 
-              <div className={`p-8 flex flex-col items-center space-y-6 transition-colors ${isDark ? 'bg-[#1a1a1a]' : 'bg-gray-50'}`}>
+              <div className={`p-8 flex flex-col items-center space-y-6 transition-colors ${isDark ? 'bg-[#1a1a1a]' : 'bg-white'}`}>
                 <div className={`text-[11px] leading-relaxed text-center ${isDark ? 'text-[#aaa]' : 'text-gray-600'}`}>
                   ”ノード”を繋いで視覚的にデータを作る、データ整形ツールです。<br/><br/>基本的な使い方は以下の3ステップです。
                 </div>
                 
                 <div className="w-full space-y-4 text-left">
-                  <div className={`p-4 rounded-xl border flex items-center gap-4 transition-colors ${isDark ? 'bg-[#1e1e1e] border-[#444] hover:border-blue-500/50' : 'bg-white border-gray-200 hover:border-blue-300'}`}>
-                    <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg shrink-0 border transition-colors ${isDark ? 'bg-[#252526] text-blue-400 border-[#444]' : 'bg-gray-50 text-blue-600 border-gray-200 shadow-sm'}`}>
+                  <div className={`p-4 rounded-xl border flex items-center gap-4 transition-colors ${isDark ? 'bg-[#1e1e1e] border-[#444] hover:border-blue-500/50' : 'bg-gray-50 border-gray-200 hover:border-gray-400'}`}>
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg shrink-0 border transition-colors ${isDark ? 'bg-[#252526] text-blue-400 border-[#444]' : 'bg-white text-gray-800 border-gray-200 shadow-sm'}`}>
                       <span className="w-5 h-5 flex items-center justify-center">{Icons.Source}</span>
                     </div>
                     <div className="flex-1">
@@ -1583,8 +1731,8 @@ const FlowBuilder = () => {
                     </div>
                   </div>
 
-                  <div className={`p-4 rounded-xl border flex items-center gap-4 transition-colors ${isDark ? 'bg-[#1e1e1e] border-[#444] hover:border-pink-500/50' : 'bg-white border-gray-200 hover:border-pink-300'}`}>
-                    <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg shrink-0 border transition-colors ${isDark ? 'bg-[#252526] text-pink-400 border-[#444]' : 'bg-gray-50 text-pink-600 border-gray-200 shadow-sm'}`}>
+                  <div className={`p-4 rounded-xl border flex items-center gap-4 transition-colors ${isDark ? 'bg-[#1e1e1e] border-[#444] hover:border-pink-500/50' : 'bg-gray-50 border-gray-200 hover:border-gray-400'}`}>
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg shrink-0 border transition-colors ${isDark ? 'bg-[#252526] text-pink-400 border-[#444]' : 'bg-white text-gray-800 border-gray-200 shadow-sm'}`}>
                       <span className="w-5 h-5 flex items-center justify-center">{Icons.Join}</span>
                     </div>
                     <div className="flex-1">
@@ -1593,8 +1741,8 @@ const FlowBuilder = () => {
                     </div>
                   </div>
 
-                  <div className={`p-4 rounded-xl border flex items-center gap-4 transition-colors ${isDark ? 'bg-[#1e1e1e] border-[#444] hover:border-emerald-500/50' : 'bg-white border-gray-200 hover:border-emerald-300'}`}>
-                    <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg shrink-0 border transition-colors ${isDark ? 'bg-[#252526] text-emerald-400 border-[#444]' : 'bg-gray-50 text-emerald-600 border-gray-200 shadow-sm'}`}>
+                  <div className={`p-4 rounded-xl border flex items-center gap-4 transition-colors ${isDark ? 'bg-[#1e1e1e] border-[#444] hover:border-emerald-500/50' : 'bg-gray-50 border-gray-200 hover:border-gray-400'}`}>
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg shrink-0 border transition-colors ${isDark ? 'bg-[#252526] text-emerald-400 border-[#444]' : 'bg-white text-gray-800 border-gray-200 shadow-sm'}`}>
                       <span className="w-5 h-5 flex items-center justify-center">{Icons.Dashboard}</span>
                     </div>
                     <div className="flex-1">
@@ -1604,8 +1752,8 @@ const FlowBuilder = () => {
                   </div>
                 </div>
               </div>
-              <button onClick={closeTutorial} className={`w-full p-4 text-[11px] font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-colors border-t ${isDark ? 'bg-[#252526] text-blue-400 border-[#444] hover:bg-[#333]' : 'bg-gray-50 text-blue-600 border-gray-200 hover:bg-gray-100'}`}>
-                <span className="w-4 h-4 flex items-center justify-center"></span> 使ってみる
+              <button onClick={closeTutorial} className={`w-full p-4 text-[11px] font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-colors border-t ${isDark ? 'bg-[#252526] text-blue-400 border-[#444] hover:bg-[#333]' : 'bg-gray-800 text-white border-gray-800 hover:bg-gray-700'}`}>
+                <span className="w-4 h-4 flex items-center justify-center">{Icons.Diamond}</span> 使ってみる
               </button>
             </div>
           </div>
@@ -1942,7 +2090,7 @@ const RangeSelectorModal = ({ isOpen, onClose, workbook, currentSheet, onRangesC
         <div className={`p-4 border-b flex flex-col font-sans transition-colors ${isDark ? 'bg-[#1a1a1a] border-[#444]' : 'bg-gray-50 border-gray-200'}`}>
           <div className="flex justify-between items-center mb-2">
             <h2 className={`text-[12px] font-bold uppercase tracking-[0.4em] flex items-center gap-2 ${isDark ? 'text-white' : 'text-gray-800'}`}>
-              <span className="text-blue-500">{Icons.Select}</span> 抽出範囲の選択
+              <span className="text-blue-500">{Icons.Select}</span> Visual Range Selection
             </h2>
             <div className="flex items-center gap-8">
               <div className="flex items-center gap-3">
@@ -1956,7 +2104,7 @@ const RangeSelectorModal = ({ isOpen, onClose, workbook, currentSheet, onRangesC
           </div>
           <p className={`text-[10px] leading-relaxed ${isDark ? 'text-[#888]' : 'text-gray-600'}`}>
             🖱️ 抽出したいデータの範囲を<strong>マウスでドラッグして選択</strong>してください。（複数の範囲を選択することも可能です）<br/>
-            ✅ 選択後、右側のパネルで<strong>「1行目をヘッダーにする」</strong>オプションをオンにすると、最初の行が列名として認識されます。
+            ✅ 選択後、右側のパネルで<strong>「1行目をヘッダーとして使用する (First row as Header)」</strong>オプションをオンにすると、最初の行が列名として認識されます。
           </p>
         </div>
         <div className="flex-1 flex overflow-hidden">
@@ -1996,7 +2144,7 @@ const RangeSelectorModal = ({ isOpen, onClose, workbook, currentSheet, onRangesC
             <h3 className={`text-[10px] font-bold uppercase border-b pb-3 ${isDark ? 'text-[#888] border-[#444]' : 'text-gray-600 border-gray-200'}`}>Selection Settings</h3>
             <label className="flex items-center gap-3 cursor-pointer group">
               <input type="checkbox" checked={uHead} onChange={(e) => setUHead(e.target.checked)} className="w-4 h-4 accent-blue-500" />
-              <span className={`text-[11px] uppercase font-bold transition-colors ${isDark ? 'text-[#ccc] group-hover:text-white' : 'text-gray-700 group-hover:text-gray-900'}`}>1行目をヘッダーにする</span>
+              <span className={`text-[11px] uppercase font-bold transition-colors ${isDark ? 'text-[#ccc] group-hover:text-white' : 'text-gray-700 group-hover:text-gray-900'}`}>First row as Header</span>
             </label>
             <div className="flex-1 overflow-auto space-y-3 pr-2 custom-scrollbar">
               {sRanges.map((rs, i) => (
@@ -2011,7 +2159,7 @@ const RangeSelectorModal = ({ isOpen, onClose, workbook, currentSheet, onRangesC
                 </div>
               ))}
             </div>
-            <button onClick={() => {onRangesConfirm(sRanges, uHead); onClose();}} className="bg-blue-600 hover:bg-blue-500 py-3.5 rounded-xl text-[11px] font-bold text-white uppercase shadow-xl active:scale-95 transition-all">選択を適用</button>
+            <button onClick={() => {onRangesConfirm(sRanges, uHead); onClose();}} className="bg-blue-600 hover:bg-blue-500 py-3.5 rounded-xl text-[11px] font-bold text-white uppercase shadow-xl active:scale-95 transition-all">Apply Selection</button>
           </div>
         </div>
       </div>
@@ -2019,4 +2167,18 @@ const RangeSelectorModal = ({ isOpen, onClose, workbook, currentSheet, onRangesC
   );
 };
 
-export default function App() { return <ReactFlowProvider><FlowBuilder /></ReactFlowProvider>; }
+export default function App() {
+  const [hash, setHash] = useState(window.location.hash);
+
+  useEffect(() => {
+    const handleHashChange = () => setHash(window.location.hash);
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
+
+  if (hash === '#/app') {
+    return <ReactFlowProvider><FlowBuilder /></ReactFlowProvider>;
+  }
+
+  return <LandingPage />;
+}
