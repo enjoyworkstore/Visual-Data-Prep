@@ -6,7 +6,6 @@ import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, R
 import type { Node, Edge } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
-// ★ 追加: TypeScriptの厳格なエラーを防ぐため、どんなデータでも持てるカスタムノード型を定義
 type CustomNode = Node<Record<string, any>>;
 
 type AppContextType = {
@@ -15,6 +14,7 @@ type AppContextType = {
   setRangeModalNode: React.Dispatch<React.SetStateAction<string | null>>;
   nodeFlowData: Record<string, any>;
   isAutoCameraMove: boolean;
+  focusNode: (id: string, force?: boolean, isDragging?: boolean) => void;
 };
 const AppContext = createContext<AppContextType>({} as AppContextType);
 
@@ -44,8 +44,12 @@ const IconSvg = ({ children }: { children: React.ReactNode }) => (
 
 const Icons = {
   Source: <IconSvg><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></IconSvg>,
+  FolderAuto: <IconSvg><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><path d="M12 11v6"/><polyline points="9 14 12 17 15 14"/></IconSvg>,
+  Web: <IconSvg><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></IconSvg>,
   Union: <IconSvg><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></IconSvg>,
   Join: <IconSvg><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></IconSvg>,
+  Vlookup: <IconSvg><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></IconSvg>,
+  Minus: <IconSvg><line x1="5" y1="12" x2="19" y2="12"/></IconSvg>,
   GroupBy: <IconSvg><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></IconSvg>,
   Sort: <IconSvg><path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="m21 8-4-4-4 4"/><path d="M17 4v16"/></IconSvg>,
   Transform: <IconSvg><path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="7" r="3"/><circle cx="8" cy="17" r="3"/></IconSvg>,
@@ -71,9 +75,7 @@ const Icons = {
 };
 
 const CAMERA_OFFSET_X = 250;
-const CAMERA_OFFSET_Y = 100;
 
-// ★ IME入力時の二重入力バグを防ぐため、フォーカスが外れた時のみ確定する専用Inputコンポーネント
 const NodeInput = memo(({ value, onChange, placeholder, className }: any) => {
   const [val, setVal] = useState(value || '');
   useEffect(() => { setVal(value || ''); }, [value]);
@@ -94,7 +96,46 @@ const calcData = (nId: string, nodes: CustomNode[], edges: Edge[], wbs: any): { 
   const node = nodes.find(n => n.id === nId);
   if (!node) return { data: [], headers: [] };
 
-  if (node.type === 'dataNode') {
+  if (node.type === 'webSourceNode') {
+    if (!node.data.rawData) return { data: [], headers: [] };
+    try {
+      let cData: any[] = [];
+      let fHdrs: string[] = [];
+      const type = node.data.dataType || 'auto';
+      const raw = node.data.rawData;
+
+      if (type === 'json' || (type === 'auto' && (raw.trim().startsWith('[') || raw.trim().startsWith('{')))) {
+        const parsed = JSON.parse(raw);
+        cData = Array.isArray(parsed) ? parsed : [parsed];
+        if (cData.length > 0) fHdrs = Object.keys(cData[0]);
+      } else if (type === 'html' || (type === 'auto' && raw.toLowerCase().includes('<table'))) {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(raw, "text/html");
+        const table = doc.querySelector('table');
+        if (table) {
+          const rows = Array.from(table.querySelectorAll('tr'));
+          const ths = Array.from(rows[0]?.querySelectorAll('th, td') || []).map(th => th.textContent?.trim() || '');
+          fHdrs = ths.length > 0 ? ths : Array.from({length: rows[0]?.querySelectorAll('td').length || 0}, (_, i) => `Col_${i+1}`);
+          
+          for (let i = ths.length > 0 && rows[0].querySelector('th') ? 1 : 0; i < rows.length; i++) {
+            const tds = Array.from(rows[i].querySelectorAll('td')).map(td => td.textContent?.trim() || '');
+            if (tds.length > 0 && tds.some(t => t !== '')) {
+              const obj: any = {};
+              fHdrs.forEach((h, cIdx) => obj[h] = tds[cIdx] || '');
+              cData.push(obj);
+            }
+          }
+        }
+      } else {
+        const parsed = Papa.parse(raw, { header: true, skipEmptyLines: true });
+        cData = parsed.data;
+        fHdrs = parsed.meta.fields || [];
+      }
+      return { data: cData, headers: fHdrs };
+    } catch (e) { return { data: [], headers: [] }; }
+  }
+
+  if (node.type === 'dataNode' || node.type === 'folderSourceNode') {
     if (node.data.needsUpload) return { data: [], headers: [] };
     const wb = wbs[node.id];
     if (!wb) return { data: [], headers: [] };
@@ -130,13 +171,41 @@ const calcData = (nId: string, nodes: CustomNode[], edges: Edge[], wbs: any): { 
     } catch (e) { return { data: [], headers: [] }; }
   }
 
-  if (node.type === 'unionNode' || node.type === 'joinNode') {
+  // ★ vlookupNode を合流ノードとして追加処理
+  if (node.type === 'unionNode' || node.type === 'joinNode' || node.type === 'minusNode' || node.type === 'vlookupNode') {
     const eA = edges.find(e => e.target === nId && (e as any).targetHandle === 'input-a');
     const eB = edges.find(e => e.target === nId && (e as any).targetHandle === 'input-b');
     if (!eA || !eB) return { data: [], headers: [] };
     const rA = calcData(eA.source, nodes, edges, wbs), rB = calcData(eB.source, nodes, edges, wbs);
+    
     if (node.type === 'unionNode') return { data: [...rA.data, ...rB.data], headers: rA.headers };
     
+    if (node.type === 'minusNode') {
+      const { keyA, keyB } = node.data;
+      if (!keyA || !keyB) return rA;
+      const bKeys = new Set(rB.data.map(b => String(b[keyB as string])));
+      const mData = rA.data.filter(a => !bKeys.has(String(a[keyA as string])));
+      return { data: mData, headers: rA.headers };
+    }
+
+    if (node.type === 'vlookupNode') {
+      const { keyA, keyB, fetchCol, targetCol } = node.data;
+      if (!keyA || !keyB || !fetchCol || !targetCol) return rA;
+
+      const newColName = targetCol;
+      const bMap = new Map();
+      rB.data.forEach(b => {
+        bMap.set(String(b[keyB as string]), b[fetchCol as string]);
+      });
+
+      const vData = rA.data.map(a => {
+        const key = String(a[keyA as string]);
+        const val = bMap.has(key) ? bMap.get(key) : null;
+        return { ...a, [newColName]: val };
+      });
+      return { data: vData, headers: [...rA.headers, newColName] };
+    }
+
     const { keyA, keyB, joinType = 'inner' } = node.data;
     if (!keyA || !keyB) return rA;
 
@@ -199,50 +268,108 @@ const calcData = (nId: string, nodes: CustomNode[], edges: Edge[], wbs: any): { 
   }
 
   if (node.type === 'transformNode') {
-    const { targetCol, command, param0 } = node.data;
-    if (targetCol && command) out = out.map(r => {
-      let v = String(r[targetCol as string] || "");
-      if (command === 'replace') v = v.replace(param0 || "", "");
-      if (command === 'math_mul') v = String(Number(v) * Number(param0 || 1));
-      if (command === 'add_suffix') v += (param0 || "");
-      
-      if (command === 'case_when') {
-        let match = false;
-        const cVal = v.toLowerCase(), tVal = String(node.data.condVal || '').toLowerCase();
-        const cNum = Number(v), tNum = Number(node.data.condVal);
-        switch (node.data.condOp) {
-          case 'exact': match = (cVal === tVal); break;
-          case 'not': match = (cVal !== tVal); break;
-          case 'gt': match = (!isNaN(cNum) && !isNaN(tNum)) ? cNum > tNum : cVal > tVal; break;
-          case 'lt': match = (!isNaN(cNum) && !isNaN(tNum)) ? cNum < tNum : cVal < tVal; break;
-          default: match = cVal.includes(tVal);
+    const { targetCol, command, param0, applyCond, condCol, condOp, condVal } = node.data;
+    if (command === 'remove_duplicates') {
+      const seen = new Set();
+      out = out.filter(r => {
+        const key = targetCol ? String(r[targetCol as string]) : JSON.stringify(r);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    } else if (targetCol && command) {
+      out = out.map(r => {
+        if (applyCond && condCol && condOp) {
+          const cValCheck = String(r[condCol as string] || '').toLowerCase();
+          const tValCheck = String(condVal || '').toLowerCase();
+          const cNumCheck = Number(r[condCol as string]), tNumCheck = Number(condVal);
+          let isMatch = false;
+          switch (condOp) {
+            case 'exact': isMatch = (cValCheck === tValCheck); break;
+            case 'not': isMatch = (cValCheck !== tValCheck); break;
+            case 'gt': isMatch = (!isNaN(cNumCheck) && !isNaN(tNumCheck)) ? cNumCheck > tNumCheck : cValCheck > tValCheck; break;
+            case 'lt': isMatch = (!isNaN(cNumCheck) && !isNaN(tNumCheck)) ? cNumCheck < tNumCheck : cValCheck < tValCheck; break;
+            default: isMatch = cValCheck.includes(tValCheck);
+          }
+          if (!isMatch) return r; 
         }
-        v = match ? (node.data.trueVal || '') : (node.data.falseVal || '');
-      }
 
-      return { ...r, [targetCol as string]: v };
-    });
+        let v = r[targetCol as string];
+        let vStr = v === null || v === undefined ? "" : String(v);
+
+        if (command === 'replace') v = vStr.replace(param0 || "", "");
+        else if (command === 'math_mul') v = Number(vStr) * Number(param0 || 1);
+        else if (command === 'add_suffix') v = vStr + (param0 || "");
+        else if (command === 'concat') v = vStr + String(param0 || '');
+        else if (command === 'to_string') v = vStr;
+        else if (command === 'to_number') {
+            const num = Number(vStr.replace(/[^0-9.-]/g, ''));
+            v = isNaN(num) ? null : num;
+        }
+        else if (command === 'fill_zero') {
+            if (vStr.trim() === '') v = 0;
+        }
+        else if (command === 'zero_padding') {
+            const len = Number(param0) || 1;
+            v = vStr.padStart(len, '0');
+        }
+        else if (command === 'round') {
+            const d = Number(param0) || 0;
+            const m = Math.pow(10, d);
+            v = Math.round(Number(vStr) * m) / m;
+        }
+        else if (command === 'mod') {
+            const denom = Number(param0) || 1;
+            v = Number(vStr) % denom;
+            if (isNaN(v)) v = null;
+        }
+        else if (command === 'substring') {
+            const params = String(param0 || '1').split(',').map(s => Number(s.trim()));
+            const start = params[0] || 1;
+            const len = params.length > 1 ? params[1] : vStr.length;
+            const sIdx = Math.max(0, start - 1);
+            v = vStr.slice(sIdx, sIdx + len);
+        }
+        else if (command === 'case_when') {
+          let match = false;
+          const cwValCheck = vStr.toLowerCase(), cwTVal = String(node.data.cwCondVal || '').toLowerCase();
+          const cwNum = Number(v), cwTNum = Number(node.data.cwCondVal);
+          switch (node.data.cwCondOp) {
+            case 'exact': match = (cwValCheck === cwTVal); break;
+            case 'not': match = (cwValCheck !== cwTVal); break;
+            case 'gt': match = (!isNaN(cwNum) && !isNaN(cwTNum)) ? cwNum > cwTNum : cwValCheck > cwTVal; break;
+            case 'lt': match = (!isNaN(cwNum) && !isNaN(cwTNum)) ? cwNum < cwTNum : cwValCheck < cwTVal; break;
+            default: match = cwValCheck.includes(cwTVal);
+          }
+          v = match ? (node.data.trueVal || '') : (node.data.falseVal || '');
+        }
+
+        return { ...r, [targetCol as string]: v };
+      });
+    }
   }
 
   return { data: out, headers: h };
 };
 
 const useNodeLogic = (id: string) => {
-  const { nodeFlowData, isAutoCameraMove } = useContext(AppContext);
-  const { updateNodeData, setNodes, setEdges, getNode, getEdges, setCenter } = useReactFlow();
+  const { nodeFlowData, isAutoCameraMove, focusNode } = useContext(AppContext);
+  const { updateNodeData, setNodes, setEdges, getEdges } = useReactFlow();
   
   return { 
     fData: nodeFlowData[id] || { incomingHeaders: [], headersA: [], headersB: [] }, 
-    onChg: (k: string, v: any) => updateNodeData(id, { [k]: v }), 
+    onChg: (k: string, v: any) => {
+      updateNodeData(id, { [k]: v });
+      if (['command', 'joinType', 'chartType', 'matchType', 'aggType', 'groupCol', 'sortCol', 'targetCol', 'filterCol', 'xAxis', 'yAxis', 'applyCond', 'dataType', 'fetchCol'].includes(k)) {
+        focusNode(id);
+      }
+    }, 
     onDel: () => { 
       if (isAutoCameraMove) {
         const edges = getEdges();
         const incomingEdge = edges.find((e: any) => e.target === id);
         if (incomingEdge) {
-          const prevNode = getNode(incomingEdge.source) as CustomNode | undefined;
-          if (prevNode) {
-            setCenter(prevNode.position.x + CAMERA_OFFSET_X, prevNode.position.y + CAMERA_OFFSET_Y, { zoom: 1.1, duration: 600 });
-          }
+          focusNode(incomingEdge.source);
         }
       }
       setNodes((nds: any) => nds.filter((n: any) => n.id !== id)); 
@@ -254,20 +381,53 @@ const useNodeLogic = (id: string) => {
 const TgtHandle = ({ id, style }: any) => <Handle type="target" position={Position.Left} id={id} style={style} className="w-5 h-5 bg-[#252526] border-[3px] border-blue-400 hover:bg-blue-400 hover:scale-125 transition-all cursor-crosshair z-10 -ml-2 nodrag" />;
 const SrcHandle = ({ col }: any) => <Handle type="source" position={Position.Right} className={`w-5 h-5 ${col} border-[3px] border-[#1e1e1e] hover:scale-125 transition-transform cursor-crosshair z-10 -mr-2 nodrag`} />;
 
-const NodeWrap = memo(({ id, title, col, children, showTgt = true, multi = false, summary = '' }: any) => {
+const NodeWrap = memo(({ id, title, col, children, showTgt = true, multi = false, summary = '', helpText = '' }: any) => {
   const { onDel } = useNodeLogic(id);
+  const [showHelp, setShowHelp] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(false); // ★ ノードの最小化状態
+
   return (
-    <div className="bg-[#252526] border border-[#444] rounded-xl shadow-2xl min-w-[260px] pb-1 relative group">
-      <button onClick={(e) => { e.stopPropagation(); onDel(); }} className="absolute -top-3 -right-3 bg-blue-600 hover:bg-blue-500 text-white rounded-full w-6 h-6 flex items-center justify-center font-bold text-xs opacity-0 group-hover:opacity-100 transition-opacity shadow-lg z-20 nodrag">
+    <div className={`bg-[#252526] border border-[#444] rounded-xl shadow-2xl min-w-[260px] pb-1 relative group/node transition-all`}>
+      <button onClick={(e) => { e.stopPropagation(); onDel(); }} className="absolute -top-3 -right-3 bg-blue-600 hover:bg-blue-500 text-white rounded-full w-6 h-6 flex items-center justify-center font-bold text-xs opacity-0 group-hover/node:opacity-100 transition-opacity shadow-lg z-20 nodrag">
         <span className="flex items-center justify-center w-3 h-3">{Icons.Close}</span>
       </button>
-      <div className="bg-[#1a1a1a] p-2 border-b border-[#444] flex justify-between items-center rounded-t-xl select-none">
-        <span className={`text-[10px] font-bold tracking-widest uppercase ${col}`}>{title}</span>
-        {summary && <span className="text-[9px] bg-[#333] text-[#aaa] px-2 py-0.5 rounded-full max-w-[120px] truncate font-mono" title={summary}>{summary}</span>}
+      <div 
+        className="bg-[#1a1a1a] p-2 border-b border-[#444] flex justify-between items-center rounded-t-xl select-none group/header cursor-pointer"
+        onDoubleClick={() => setIsCollapsed(!isCollapsed)}
+      >
+        <div className="flex items-center gap-2">
+          {/* ★ 最小化トグルボタン */}
+          <button 
+            onClick={(e) => { e.stopPropagation(); setIsCollapsed(!isCollapsed); }}
+            className="text-[#888] hover:text-white transition-colors flex items-center justify-center w-4 h-4 nodrag"
+            title={isCollapsed ? "展開する" : "最小化する"}
+          >
+            {isCollapsed ? Icons.ChevronDown : Icons.ChevronUp}
+          </button>
+          <span className={`text-[10px] font-bold tracking-widest uppercase ${col}`}>{title}</span>
+          {helpText && (
+            <div className="relative flex items-center">
+              <button 
+                onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowHelp(!showHelp); }}
+                className={`text-[10px] flex items-center justify-center w-4 h-4 rounded-full border nodrag transition-colors ${showHelp ? 'bg-blue-500 text-white border-blue-500' : 'text-[#888] hover:text-white border-[#555] bg-[#222]'}`}
+              >
+                ?
+              </button>
+              {showHelp && (
+                <div className="absolute left-6 top-1/2 -translate-y-1/2 w-56 bg-[#111] text-[#ccc] text-[11px] p-3 rounded-lg border border-[#444] z-50 shadow-2xl normal-case tracking-normal leading-relaxed">
+                  {helpText}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        {summary && <span className="text-[9px] bg-[#333] text-[#aaa] px-2 py-0.5 rounded-full max-w-[100px] truncate font-mono" title={summary}>{summary}</span>}
       </div>
-      <div className="p-4 relative flex flex-col gap-3">
+      <div className={`relative transition-all ${isCollapsed ? 'h-8' : 'p-4 flex flex-col gap-3'}`}>
         {multi ? <><TgtHandle id="input-a" style={{ top: '30%' }} /><TgtHandle id="input-b" style={{ top: '70%' }} /></> : (showTgt && <TgtHandle />)}
-        {children}
+        <div className={isCollapsed ? 'hidden' : 'contents'}>
+          {children}
+        </div>
       </div>
       <SrcHandle col={col.replace('text-', 'bg-')} />
     </div>
@@ -275,7 +435,7 @@ const NodeWrap = memo(({ id, title, col, children, showTgt = true, multi = false
 });
 
 const DataNode = memo(({ id, data }: any) => {
-  const { setWorkbooks, setRangeModalNode } = useContext(AppContext);
+  const { setWorkbooks, setRangeModalNode, focusNode } = useContext(AppContext);
   const { updateNodeData } = useReactFlow();
   const onUp = (e: any) => {
     const f = e.target.files?.[0]; if (!f) return;
@@ -283,11 +443,12 @@ const DataNode = memo(({ id, data }: any) => {
       const wb = XLSX.read(evt.target.result, { type: 'binary' });
       setWorkbooks((p: any) => ({ ...p, [id]: wb }));
       updateNodeData(id, { fileName: f.name, sheetNames: wb.SheetNames, currentSheet: wb.SheetNames[0], needsUpload: false });
+      focusNode(id);
     }; r.readAsBinaryString(f);
   };
   const summary = data.fileName ? data.fileName : '';
   return (
-    <NodeWrap id={id} title="Source" col="text-blue-400" showTgt={false} summary={summary}>
+    <NodeWrap id={id} title="Source" col="text-blue-400" showTgt={false} summary={summary} helpText="ローカルのCSVやExcelファイルを選択して読み込みます。パネルから抽出範囲やヘッダーの設定が可能です。">
       {data.needsUpload ? (
         <div className="space-y-3">
           <div className="text-[10px] text-white flex items-center gap-2 bg-blue-500/20 p-2 rounded border border-blue-500/50">
@@ -311,21 +472,151 @@ const DataNode = memo(({ id, data }: any) => {
               <span className="flex items-center justify-center">{Icons.Refresh}</span> <input type="file" className="hidden" onChange={onUp} />
             </label>
           </div>
-          <button onClick={() => setRangeModalNode(id)} className="w-full py-2 bg-blue-600/20 text-blue-400 text-[10px] font-bold rounded border border-blue-500/30 hover:bg-blue-600/40 uppercase tracking-widest transition-all nodrag">Visual Range</button>
-          <label className="flex items-center gap-2 pt-2 cursor-pointer group"><input type="checkbox" checked={data.useFirstRowAsHeader !== false} onChange={(e) => updateNodeData(id, { useFirstRowAsHeader: e.target.checked })} className="accent-blue-500 w-4 h-4 cursor-pointer nodrag" /><span className="text-[10px] text-[#aaa] group-hover:text-white font-bold uppercase">1st row as Header</span></label>
+          <button onClick={() => setRangeModalNode(id)} className="w-full py-2 bg-blue-600/20 text-blue-400 text-[10px] font-bold rounded border border-blue-500/30 hover:bg-blue-600/40 uppercase tracking-widest transition-all nodrag">範囲選択</button>
+          <label className="flex items-center gap-2 pt-2 cursor-pointer group"><input type="checkbox" checked={data.useFirstRowAsHeader !== false} onChange={(e) => updateNodeData(id, { useFirstRowAsHeader: e.target.checked })} className="accent-blue-500 w-4 h-4 cursor-pointer nodrag" /><span className="text-[10px] text-[#aaa] group-hover:text-white font-bold uppercase">1行目をヘッダーにする</span></label>
         </div>
       )}
     </NodeWrap>
   );
 });
 
-const UnionNode = memo(({ id }: any) => <NodeWrap id={id} title="Union" col="text-blue-400" multi={true} summary="Append"><div className="text-[10px] text-[#888] text-center italic tracking-widest uppercase py-2">Merge Vertically</div></NodeWrap>);
+const FolderSourceNode = memo(({ id, data }: any) => {
+  const { setWorkbooks, setRangeModalNode, focusNode } = useContext(AppContext);
+  const { updateNodeData } = useReactFlow();
+
+  const handleSelectFolder = async () => {
+    try {
+      if (!('showDirectoryPicker' in window)) {
+        alert('お使いのブラウザはフォルダ選択に対応していません。ChromeやEdgeをご利用ください。');
+        return;
+      }
+      const dirHandle = await (window as any).showDirectoryPicker();
+      let latestFileHandle: any = null;
+      let latestTime = 0;
+
+      for await (const entry of dirHandle.values()) {
+        if (entry.kind === 'file' && (entry.name.endsWith('.csv') || entry.name.endsWith('.xlsx'))) {
+          const file = await entry.getFile();
+          if (file.lastModified > latestTime) {
+            latestTime = file.lastModified;
+            latestFileHandle = file;
+          }
+        }
+      }
+
+      if (latestFileHandle) {
+        const file = await latestFileHandle.getFile();
+        const r = new FileReader();
+        r.onload = (evt: any) => {
+          const wb = XLSX.read(evt.target.result, { type: 'binary' });
+          setWorkbooks((p: any) => ({ ...p, [id]: wb }));
+          updateNodeData(id, { 
+              folderName: dirHandle.name, 
+              fileName: latestFileHandle.name, 
+              sheetNames: wb.SheetNames, 
+              currentSheet: wb.SheetNames[0], 
+              needsUpload: false 
+          });
+          focusNode(id);
+        };
+        r.readAsBinaryString(file);
+      } else {
+        alert("フォルダ内にCSVまたはExcelファイルが見つかりませんでした。");
+      }
+    } catch (e) {
+      console.log("フォルダ選択キャンセルまたはエラー:", e);
+    }
+  };
+
+  const summary = data.folderName ? `[${data.folderName}] ${data.fileName}` : '';
+  return (
+    <NodeWrap id={id} title="Auto Folder" col="text-indigo-400" showTgt={false} summary={summary} helpText="指定したフォルダを監視し、その中の『最も新しく更新されたファイル』を自動で読み込みます。毎月の売上データ追加など、定期的な更新作業に便利です。">
+      {data.needsUpload ? (
+        <div className="space-y-3">
+          <div className="text-[10px] text-white flex items-center gap-2 bg-indigo-500/20 p-2 rounded border border-indigo-500/50">
+            <span className="text-indigo-400 flex items-center justify-center">{Icons.Warning}</span> Missing: {data.folderName}
+          </div>
+          <button onClick={handleSelectFolder} className="w-full text-indigo-400 text-[10px] border border-dashed border-indigo-500/50 p-3 rounded flex items-center justify-center gap-2 hover:bg-indigo-500/20 font-bold uppercase transition-all shadow-lg animate-pulse nodrag">
+            <span className="flex items-center justify-center">{Icons.FolderAuto}</span> フォルダを再選択
+          </button>
+        </div>
+      ) : !data.folderName ? (
+        <button onClick={handleSelectFolder} className="w-full text-indigo-400 text-[10px] border border-dashed border-indigo-500/50 p-4 rounded flex items-center justify-center gap-2 hover:bg-indigo-500/10 font-bold uppercase transition-all nodrag">
+          <span className="flex items-center justify-center w-4 h-4">{Icons.FolderAuto}</span> Select Folder
+        </button>
+      ) : (
+        <div className="space-y-3">
+          <div className="flex flex-col bg-[#1a1a1a] p-2 rounded border border-[#333] gap-1">
+            <div className="text-[9px] text-[#888] font-bold truncate flex items-center gap-1">
+              <span className="flex items-center justify-center w-3 h-3">{Icons.Folder}</span> {data.folderName}
+            </div>
+            <div className="text-[10px] text-white font-bold truncate flex items-center gap-2 justify-between">
+              <div className="flex items-center gap-1 truncate"><span className="text-indigo-400 flex items-center justify-center w-3 h-3">{Icons.File}</span> <span className="truncate">{data.fileName}</span></div>
+              <button onClick={handleSelectFolder} className="cursor-pointer text-indigo-400 hover:text-white text-[12px] font-bold uppercase transition-colors nodrag shrink-0" title="Rescan Folder">
+                <span className="flex items-center justify-center">{Icons.Refresh}</span>
+              </button>
+            </div>
+          </div>
+          <button onClick={() => setRangeModalNode(id)} className="w-full py-2 bg-indigo-600/20 text-indigo-400 text-[10px] font-bold rounded border border-indigo-500/30 hover:bg-indigo-600/40 uppercase tracking-widest transition-all nodrag">範囲選択</button>
+          <label className="flex items-center gap-2 pt-2 cursor-pointer group"><input type="checkbox" checked={data.useFirstRowAsHeader !== false} onChange={(e) => updateNodeData(id, { useFirstRowAsHeader: e.target.checked })} className="accent-indigo-500 w-4 h-4 cursor-pointer nodrag" /><span className="text-[10px] text-[#aaa] group-hover:text-white font-bold uppercase">1行目をヘッダーにする</span></label>
+        </div>
+      )}
+    </NodeWrap>
+  );
+});
+
+const WebSourceNode = memo(({ id, data }: any) => {
+  const { focusNode } = useContext(AppContext);
+  const { updateNodeData } = useReactFlow();
+  const [url, setUrl] = useState(data.url || '');
+  const [loading, setLoading] = useState(false);
+
+  const handleFetch = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('Network response was not ok');
+      const text = await res.text();
+      updateNodeData(id, { url, fetchedUrl: url, rawData: text });
+      focusNode(id);
+    } catch(e) {
+      alert("データの取得に失敗しました。URLが間違っているか、CORS（セキュリティ制限）によってブロックされています。");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const summary = data.fetchedUrl ? `Loaded` : '';
+
+  return (
+    <NodeWrap id={id} title="Web Source" col="text-emerald-400" showTgt={false} summary={summary} helpText="指定したURLからデータを取得します。API(JSON)やCSV、またはWebページの表(HTML Table)を自動的に抽出します。">
+      <div className="space-y-3">
+         <div className="flex flex-col gap-2">
+           <input type="text" className="w-full bg-[#1a1a1a] text-[10px] p-2 border border-[#444] text-white rounded outline-none focus:border-emerald-500 nodrag transition-colors" placeholder="https://example.com/api/data" value={url} onChange={e=>setUrl(e.target.value)} />
+           <button onClick={handleFetch} disabled={loading || !url} className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-[10px] font-bold py-2 rounded nodrag shadow-lg transition-all active:scale-95">{loading ? '取得中...' : '🌐 データ取得'}</button>
+         </div>
+         <div className="space-y-1">
+           <label className="text-[8px] text-[#888] font-bold uppercase tracking-widest">Data Type</label>
+           <select className="w-full bg-[#1a1a1a] text-[10px] p-1.5 border border-[#444] text-[#ccc] rounded outline-none hover:border-emerald-400 transition-colors nodrag" value={data.dataType || 'auto'} onChange={(e) => updateNodeData(id, { dataType: e.target.value })}>
+             <option value="auto">自動判別 (Auto)</option>
+             <option value="json">JSON API</option>
+             <option value="csv">CSVファイル</option>
+             <option value="html">Webページ (表抽出)</option>
+           </select>
+         </div>
+         {data.fetchedUrl && <div className="text-[8px] text-emerald-400 truncate mt-2 bg-emerald-900/20 p-1.5 rounded border border-emerald-500/30">Loaded: {data.fetchedUrl}</div>}
+      </div>
+    </NodeWrap>
+  )
+});
+
+const UnionNode = memo(({ id }: any) => <NodeWrap id={id} title="Union" col="text-blue-400" multi={true} summary="Append" helpText="2つのデータを「縦」に繋ぎ合わせます。（例: 1月のデータと2月のデータを1つの表にする）"><div className="text-[10px] text-[#888] text-center italic tracking-widest uppercase py-2">Merge Vertically</div></NodeWrap>);
 
 const JoinNode = memo(({ id, data }: any) => {
   const { fData, onChg } = useNodeLogic(id);
   const summary = data.keyA && data.keyB ? `${data.joinType || 'INNER'} JOIN` : '';
   return (
-    <NodeWrap id={id} title="Join" col="text-blue-400" multi={true} summary={summary}>
+    <NodeWrap id={id} title="Join" col="text-blue-400" multi={true} summary={summary} helpText="2つのデータを共通の「キー（列）」を使って「横」に繋ぎ合わせます。">
       <div className="space-y-3">
         <select className="w-full bg-[#1a1a1a] text-[10px] p-2 border border-[#444] text-white font-bold rounded outline-none hover:border-blue-400 transition-colors nodrag" value={data.joinType || 'inner'} onChange={(e) => onChg('joinType', e.target.value)}>
           <option value="inner">INNER JOIN (共通のみ)</option>
@@ -333,11 +624,11 @@ const JoinNode = memo(({ id, data }: any) => {
           <option value="right">RIGHT JOIN (副データを全て残す)</option>
         </select>
         <div className="space-y-1">
-          <label className="text-[8px] text-[#888] uppercase tracking-widest font-bold">Main Key</label>
+          <label className="text-[8px] text-[#888] uppercase tracking-widest font-bold">Main Key (A)</label>
           <select className="w-full bg-[#1a1a1a] text-[10px] p-2 border border-[#444] text-[#ccc] rounded outline-none hover:border-blue-400 transition-colors nodrag" value={data.keyA || ''} onChange={(e) => onChg('keyA', e.target.value)}><option value="">Select Column...</option>{fData.headersA?.map((h: string) => <option key={h} value={h}>{h}</option>)}</select>
         </div>
         <div className="space-y-1">
-          <label className="text-[8px] text-[#888] uppercase tracking-widest font-bold">Sub Key</label>
+          <label className="text-[8px] text-[#888] uppercase tracking-widest font-bold">Sub Key (B)</label>
           <select className="w-full bg-[#1a1a1a] text-[10px] p-2 border border-[#444] text-[#ccc] rounded outline-none hover:border-blue-400 transition-colors nodrag" value={data.keyB || ''} onChange={(e) => onChg('keyB', e.target.value)}><option value="">Select Column...</option>{fData.headersB?.map((h: string) => <option key={h} value={h}>{h}</option>)}</select>
         </div>
       </div>
@@ -345,11 +636,58 @@ const JoinNode = memo(({ id, data }: any) => {
   );
 });
 
+const VlookupNode = memo(({ id, data }: any) => {
+  const { fData, onChg } = useNodeLogic(id);
+  const summary = data.targetCol && data.fetchCol ? `Add ${data.targetCol}` : '';
+  return (
+    <NodeWrap id={id} title="VLOOKUP" col="text-pink-400" multi={true} summary={summary} helpText="上(A)のデータの指定列をキーとして、下(B)のマスタデータを検索し、一致する行の特定列の値を新しい列として追加します。">
+      <div className="space-y-3">
+        <div className="space-y-1">
+          <label className="text-[8px] text-[#888] uppercase tracking-widest font-bold">Search Key (A)</label>
+          <select className="w-full bg-[#1a1a1a] text-[10px] p-2 border border-[#444] text-[#ccc] rounded outline-none hover:border-pink-400 transition-colors nodrag" value={data.keyA || ''} onChange={(e) => onChg('keyA', e.target.value)}><option value="">Select Column...</option>{fData.headersA?.map((h: string) => <option key={h} value={h}>{h}</option>)}</select>
+        </div>
+        <div className="space-y-1">
+          <label className="text-[8px] text-[#888] uppercase tracking-widest font-bold">Master Key (B)</label>
+          <select className="w-full bg-[#1a1a1a] text-[10px] p-2 border border-[#444] text-[#ccc] rounded outline-none hover:border-pink-400 transition-colors nodrag" value={data.keyB || ''} onChange={(e) => onChg('keyB', e.target.value)}><option value="">Select Column...</option>{fData.headersB?.map((h: string) => <option key={h} value={h}>{h}</option>)}</select>
+        </div>
+        <div className="space-y-1">
+          <label className="text-[8px] text-[#888] uppercase tracking-widest font-bold">Column to fetch (B)</label>
+          <select className="w-full bg-[#1a1a1a] text-[10px] p-2 border border-[#444] text-white font-bold rounded outline-none hover:border-pink-400 transition-colors nodrag" value={data.fetchCol || ''} onChange={(e) => onChg('fetchCol', e.target.value)}><option value="">Select Column...</option>{fData.headersB?.map((h: string) => <option key={h} value={h}>{h}</option>)}</select>
+        </div>
+        <div className="space-y-1">
+          <label className="text-[8px] text-[#888] uppercase tracking-widest font-bold">New Column Name</label>
+          <NodeInput className="w-full bg-[#1a1a1a] text-[10px] p-2 border border-[#444] text-white rounded outline-none focus:border-pink-400 transition-colors" placeholder="e.g. Price" value={data.targetCol || ''} onChange={(v: any) => onChg('targetCol', v)} />
+        </div>
+      </div>
+    </NodeWrap>
+  );
+});
+
+const MinusNode = memo(({ id, data }: any) => {
+  const { fData, onChg } = useNodeLogic(id);
+  const summary = data.keyA && data.keyB ? `Minus` : '';
+  return (
+    <NodeWrap id={id} title="Minus" col="text-rose-500" multi={true} summary={summary} helpText="上(A)のデータから、下(B)のデータに存在するレコードを差し引いて残りのデータを抽出します。">
+      <div className="space-y-3">
+        <div className="space-y-1">
+          <label className="text-[8px] text-[#888] uppercase tracking-widest font-bold">Target Key (A)</label>
+          <select className="w-full bg-[#1a1a1a] text-[10px] p-2 border border-[#444] text-[#ccc] rounded outline-none hover:border-rose-400 transition-colors nodrag" value={data.keyA || ''} onChange={(e) => onChg('keyA', e.target.value)}><option value="">Select Column...</option>{fData.headersA?.map((h: string) => <option key={h} value={h}>{h}</option>)}</select>
+        </div>
+        <div className="space-y-1">
+          <label className="text-[8px] text-[#888] uppercase tracking-widest font-bold">Subtract Key (B)</label>
+          <select className="w-full bg-[#1a1a1a] text-[10px] p-2 border border-[#444] text-[#ccc] rounded outline-none hover:border-rose-400 transition-colors nodrag" value={data.keyB || ''} onChange={(e) => onChg('keyB', e.target.value)}><option value="">Select Column...</option>{fData.headersB?.map((h: string) => <option key={h} value={h}>{h}</option>)}</select>
+        </div>
+      </div>
+    </NodeWrap>
+  );
+});
+
+
 const SortNode = memo(({ id, data }: any) => {
   const { fData, onChg } = useNodeLogic(id);
   const summary = data.sortCol ? `${data.sortCol} ${data.sortOrder === 'desc' ? '↓' : '↑'}` : '';
   return (
-    <NodeWrap id={id} title="Sort" col="text-blue-400" summary={summary}>
+    <NodeWrap id={id} title="Sort" col="text-blue-400" summary={summary} helpText="指定した列の値を使って、データを昇順（小さい順）または降順（大きい順）に並び替えます。">
       <div className="space-y-2">
         <select className="w-full bg-[#1a1a1a] text-[10px] p-2 border border-[#444] text-[#ccc] rounded outline-none hover:border-blue-400 transition-colors nodrag" value={data.sortCol || ''} onChange={(e) => onChg('sortCol', e.target.value)}><option value="">Target Column...</option>{fData.incomingHeaders?.map((h: string) => <option key={h} value={h}>{h}</option>)}</select>
         <select className="w-full bg-[#1a1a1a] text-[10px] p-2 border border-[#444] text-[#ccc] rounded outline-none hover:border-blue-400 transition-colors nodrag" value={data.sortOrder || 'asc'} onChange={(e) => onChg('sortOrder', e.target.value)}><option value="asc">Ascending ↑</option><option value="desc">Descending ↓</option></select>
@@ -360,35 +698,81 @@ const SortNode = memo(({ id, data }: any) => {
 
 const TransformNode = memo(({ id, data }: any) => {
   const { fData, onChg } = useNodeLogic(id);
-  const summary = data.targetCol ? `${data.command === 'case_when' ? 'CASE WHEN' : (data.command || '...')} on ${data.targetCol}` : '';
+  const summary = data.targetCol || data.command === 'remove_duplicates' ? `${data.command === 'case_when' ? 'CASE WHEN' : (data.command || '...')} on ${data.targetCol || 'All'}` : '';
+  
+  let ph = "Parameter (ex: ',' or '100')";
+  if (data.command === 'zero_padding') ph = "桁数を入力 (例: 3)";
+  else if (data.command === 'substring') ph = "開始位置, 文字数 (例: 1, 3)";
+  else if (data.command === 'round') ph = "小数点以下の桁数 (例: 0)";
+  else if (data.command === 'mod') ph = "割る数 (例: 2)";
+
   return (
-    <NodeWrap id={id} title="Transform" col="text-blue-400" summary={summary}>
+    <NodeWrap id={id} title="Transform" col="text-blue-400" summary={summary} helpText="データの内容を書き換えたり、型を変換したり、欠損値を補填したりする強力なクレンジングノードです。">
       <div className="space-y-2">
-        <select className="w-full bg-[#1a1a1a] text-[10px] p-2 border border-[#444] text-[#ccc] rounded outline-none hover:border-blue-400 transition-colors nodrag" value={data.targetCol || ''} onChange={(e) => onChg('targetCol', e.target.value)}><option value="">Target Column...</option>{fData.incomingHeaders?.map((h: string) => <option key={h} value={h}>{h}</option>)}</select>
+        <select className="w-full bg-[#1a1a1a] text-[10px] p-2 border border-[#444] text-[#ccc] rounded outline-none hover:border-blue-400 transition-colors nodrag" value={data.targetCol || ''} onChange={(e) => onChg('targetCol', e.target.value)}>
+          <option value="">{data.command === 'remove_duplicates' ? '全体で重複判定 (All Columns)' : 'Target Column...'}</option>
+          {fData.incomingHeaders?.map((h: string) => <option key={h} value={h}>{h}</option>)}
+        </select>
         <select className="w-full bg-[#1a1a1a] text-[10px] p-2 border border-[#444] text-white font-bold rounded outline-none hover:border-blue-400 transition-colors nodrag" value={data.command || ''} onChange={(e) => onChg('command', e.target.value)}>
           <option value="">Select Action...</option>
           <option value="replace">不要文字を削除/置換</option>
           <option value="math_mul">数値を掛け算</option>
           <option value="add_suffix">末尾に文字追加</option>
+          <option value="concat">文字結合 (CONCAT)</option>
+          <option value="substring">文字抽出 (SUBSTRING)</option>
           <option value="case_when">条件分岐 (CASE WHEN)</option>
+          <option value="to_string">文字列に変換 (ToString)</option>
+          <option value="to_number">数値に変換 (ToNumber)</option>
+          <option value="round">四捨五入 (ROUND)</option>
+          <option value="mod">剰余/余り (MOD)</option>
+          <option value="fill_zero">空白/nullを0で補填</option>
+          <option value="zero_padding">指定桁数で0埋め (Zero Padding)</option>
+          <option value="remove_duplicates">重複行を削除 (Remove Duplicates)</option>
         </select>
+
+        {data.command && data.command !== 'remove_duplicates' && data.command !== 'case_when' && (
+          <div className="pt-2 border-t border-[#444]">
+            <label className="flex items-center gap-2 cursor-pointer group mb-2">
+              <input type="checkbox" checked={data.applyCond || false} onChange={(e) => onChg('applyCond', e.target.checked)} className="accent-blue-500 w-3 h-3 cursor-pointer nodrag" />
+              <span className="text-[9px] text-[#aaa] group-hover:text-white font-bold transition-colors">特定の条件の時だけ適用する</span>
+            </label>
+            {data.applyCond && (
+              <div className="flex flex-col gap-1.5 p-2 bg-[#111] rounded border border-[#333]">
+                <select className="w-full bg-[#1a1a1a] text-[9px] p-1.5 border border-[#444] text-[#ccc] rounded outline-none nodrag" value={data.condCol || ''} onChange={(e) => onChg('condCol', e.target.value)}>
+                  <option value="">If Column...</option>{fData.incomingHeaders?.map((h: string) => <option key={h} value={h}>{h}</option>)}
+                </select>
+                <div className="flex gap-1">
+                  <select className="w-1/3 bg-[#1a1a1a] text-[9px] p-1.5 border border-[#444] text-blue-400 font-bold rounded outline-none nodrag" value={data.condOp || 'exact'} onChange={(e) => onChg('condOp', e.target.value)}>
+                    <option value="exact">=</option><option value="not">≠</option><option value="gt">&gt;</option><option value="lt">&lt;</option><option value="includes">inc</option>
+                  </select>
+                  <NodeInput className="w-2/3 bg-[#1a1a1a] text-[9px] p-1.5 border border-[#444] text-white rounded outline-none focus:border-blue-400 transition-colors" placeholder="Value..." value={data.condVal || ''} onChange={(v: any) => onChg('condVal', v)} />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         
         {data.command === 'case_when' && (
           <div className="space-y-2 mt-2 pt-2 border-t border-[#444]">
             <div className="text-[8px] text-[#888] font-bold uppercase">If Condition:</div>
             <div className="flex gap-1">
-              <select className="w-1/3 bg-[#1a1a1a] text-[10px] p-2 border border-[#444] text-blue-400 font-bold rounded outline-none nodrag hover:border-blue-400 transition-colors" value={data.condOp || 'exact'} onChange={(e) => onChg('condOp', e.target.value)}>
+              <select className="w-1/3 bg-[#1a1a1a] text-[10px] p-2 border border-[#444] text-blue-400 font-bold rounded outline-none nodrag hover:border-blue-400 transition-colors" value={data.cwCondOp || 'exact'} onChange={(e) => onChg('cwCondOp', e.target.value)}>
                 <option value="exact">=</option><option value="not">≠</option><option value="gt">&gt;</option><option value="lt">&lt;</option><option value="includes">inc</option>
               </select>
-              <NodeInput className="w-2/3 bg-[#1a1a1a] text-[10px] p-2 border border-[#444] text-white rounded outline-none focus:border-blue-400 transition-colors" placeholder="Value..." value={data.condVal || ''} onChange={(v: any) => onChg('condVal', v)} />
+              <NodeInput className="w-2/3 bg-[#1a1a1a] text-[10px] p-2 border border-[#444] text-white rounded outline-none focus:border-blue-400 transition-colors" placeholder="Value..." value={data.cwCondVal || ''} onChange={(v: any) => onChg('cwCondVal', v)} />
             </div>
             <NodeInput className="w-full bg-[#1a1a1a] text-[10px] p-2 border border-[#444] text-white rounded outline-none focus:border-blue-400 transition-colors" placeholder="Then (True Value)" value={data.trueVal || ''} onChange={(v: any) => onChg('trueVal', v)} />
             <NodeInput className="w-full bg-[#1a1a1a] text-[10px] p-2 border border-[#444] text-[#aaa] rounded outline-none focus:border-blue-400 transition-colors" placeholder="Else (False Value)" value={data.falseVal || ''} onChange={(v: any) => onChg('falseVal', v)} />
           </div>
         )}
 
-        {data.command && data.command !== 'case_when' && (
-          <NodeInput className="w-full bg-[#1a1a1a] text-[10px] p-2 border border-[#444] text-white rounded outline-none focus:border-blue-400 transition-colors" placeholder="Parameter (ex: ',' or '100')" value={data.param0 || ''} onChange={(v: any) => onChg('param0', v)} />
+        {data.command && !['case_when', 'to_string', 'to_number', 'fill_zero', 'remove_duplicates'].includes(data.command) && (
+          <NodeInput 
+            className="w-full bg-[#1a1a1a] text-[10px] p-2 border border-[#444] text-white rounded outline-none focus:border-blue-400 transition-colors mt-2" 
+            placeholder={ph} 
+            value={data.param0 || ''} 
+            onChange={(v: any) => onChg('param0', v)} 
+          />
         )}
       </div>
     </NodeWrap>
@@ -401,7 +785,7 @@ const FilterNode = memo(({ id, data }: any) => {
   const op = data.matchType === 'gt' ? '>' : data.matchType === 'lt' ? '<' : data.matchType === 'exact' ? '=' : data.matchType === 'not' ? '≠' : 'inc';
   const summary = data.filterCol ? `${data.filterCol} ${op} ${data.filterVal || ''}` : '';
   return (
-    <NodeWrap id={id} title="Filter" col="text-blue-400" summary={summary}>
+    <NodeWrap id={id} title="Filter" col="text-blue-400" summary={summary} helpText="指定した列の値が、入力した条件に一致する行だけを抽出して残します。（例: 売上が1000以上、など）">
       <div className="space-y-2">
         <select className="w-full bg-[#1a1a1a] text-[10px] p-2 border border-[#444] text-[#ccc] rounded outline-none hover:border-blue-400 transition-colors nodrag" value={data.filterCol || ''} onChange={(e) => onChg('filterCol', e.target.value)}><option value="">Target Column...</option>{fData.incomingHeaders?.map((h: string) => <option key={h} value={h}>{h}</option>)}</select>
         <div className="flex flex-col gap-2">
@@ -419,7 +803,7 @@ const SelectNode = memo(({ id, data }: any) => {
   const { fData, onChg } = useNodeLogic(id);
   const summary = data.selectedColumns?.length ? `${data.selectedColumns.length} cols selected` : '';
   return (
-    <NodeWrap id={id} title="Select" col="text-blue-400" summary={summary}>
+    <NodeWrap id={id} title="Select" col="text-blue-400" summary={summary} helpText="データの中で「必要な列（カラム）」だけを選んで残し、不要な列を削除します。">
       <div className="max-h-48 overflow-y-auto space-y-1 p-1 bg-[#1a1a1a] rounded border border-[#333] custom-scrollbar">
         {fData.incomingHeaders?.length > 0 ? fData.incomingHeaders.map((h: string) => (
           <label key={h} className="flex items-center gap-2 text-[10px] text-[#ccc] hover:bg-[#333] p-1.5 rounded cursor-pointer group"><input type="checkbox" checked={(data.selectedColumns || []).includes(h)} onChange={(e) => { const c = data.selectedColumns || []; onChg('selectedColumns', e.target.checked ? [...c, h] : c.filter((x: string) => x !== h)); }} className="accent-blue-500 w-3 h-3 nodrag" /><span className="truncate group-hover:text-white">{h}</span></label>
@@ -433,7 +817,7 @@ const GroupByNode = memo(({ id, data }: any) => {
   const { fData, onChg } = useNodeLogic(id);
   const summary = data.groupCol ? `By ${data.groupCol}` : '';
   return (
-    <NodeWrap id={id} title="Group By" col="text-blue-400" summary={summary}>
+    <NodeWrap id={id} title="Group By" col="text-blue-400" summary={summary} helpText="指定したキーでデータをグループ化し、数値を合計(SUM)したり件数をカウント(CNT)したりして集計します。">
       <div className="space-y-3">
         <div className="space-y-1">
           <label className="text-[8px] text-[#888] uppercase tracking-widest font-bold">Group Key</label>
@@ -455,7 +839,7 @@ const ChartNode = memo(({ id, data }: any) => {
   const { fData, onChg } = useNodeLogic(id);
   const summary = data.xAxis && data.yAxis ? `${data.chartType} chart` : '';
   return (
-    <NodeWrap id={id} title="Visualizer" col="text-blue-400" summary={summary}>
+    <NodeWrap id={id} title="Visualizer" col="text-blue-400" summary={summary} helpText="データをグラフとして描画します。配置したグラフは下部の「Dashboard」タブで一覧表示できます。">
       <div className="space-y-2">
         <select className="w-full bg-[#1a1a1a] text-[10px] p-2 border border-[#444] text-white font-bold outline-none hover:border-blue-400 transition-colors nodrag" value={data.chartType || 'bar'} onChange={(e) => onChg('chartType', e.target.value)}>
           <option value="bar">Bar Chart</option>
@@ -470,15 +854,15 @@ const ChartNode = memo(({ id, data }: any) => {
   );
 });
 
-const nodeTypesObj = { dataNode: DataNode, unionNode: UnionNode, joinNode: JoinNode, groupByNode: GroupByNode, sortNode: SortNode, transformNode: TransformNode, selectNode: SelectNode, filterNode: FilterNode, chartNode: ChartNode };
+const nodeTypesObj = { dataNode: DataNode, folderSourceNode: FolderSourceNode, webSourceNode: WebSourceNode, unionNode: UnionNode, joinNode: JoinNode, vlookupNode: VlookupNode, minusNode: MinusNode, groupByNode: GroupByNode, sortNode: SortNode, transformNode: TransformNode, selectNode: SelectNode, filterNode: FilterNode, chartNode: ChartNode };
 
 const NodeNavigator = ({ tList, nodes }: { tList: any[], nodes: CustomNode[] }) => {
-  const { setCenter } = useReactFlow();
+  const { focusNode } = useContext(AppContext);
   const [isMinimized, setIsMinimized] = useState(false);
 
   if (isMinimized) {
     return (
-      <Panel position="top-right" className="bg-[#252526]/90 backdrop-blur-md border border-[#444] rounded-xl shadow-xl z-50 m-4 mr-6 cursor-pointer hover:bg-[#333] transition-colors" onClick={() => setIsMinimized(false)}>
+      <Panel position="top-right" className="bg-[#252526]/90 backdrop-blur-md border border-[#444] rounded-xl shadow-xl z-50 m-4 mr-6 cursor-pointer hover:bg-[#333] transition-colors no-print" onClick={() => setIsMinimized(false)}>
         <div className="flex items-center gap-2 p-2 px-3 text-[10px] text-[#888] font-bold uppercase tracking-widest">
           <span className="text-blue-400 flex items-center justify-center">{Icons.Diamond}</span>
           <span className="text-white">{nodes.length} Nodes</span>
@@ -488,7 +872,7 @@ const NodeNavigator = ({ tList, nodes }: { tList: any[], nodes: CustomNode[] }) 
   }
 
   return (
-    <Panel position="top-right" className="bg-[#252526]/90 backdrop-blur-md border border-[#444] p-3 rounded-xl shadow-xl max-h-[300px] overflow-y-auto custom-scrollbar flex flex-col gap-1.5 w-60 z-50 m-4 mr-6">
+    <Panel position="top-right" className="bg-[#252526]/90 backdrop-blur-md border border-[#444] p-3 rounded-xl shadow-xl max-h-[300px] overflow-y-auto custom-scrollbar flex flex-col gap-1.5 w-60 z-50 m-4 mr-6 no-print">
       <div className="text-[10px] text-[#888] font-bold uppercase tracking-widest mb-2 px-1 flex items-center justify-between border-b border-[#444] pb-2">
         <span className="flex items-center gap-1.5"><span className="text-blue-400 flex items-center justify-center">{Icons.Diamond}</span> Navigator</span>
         <div className="flex items-center gap-2">
@@ -502,20 +886,22 @@ const NodeNavigator = ({ tList, nodes }: { tList: any[], nodes: CustomNode[] }) 
         const label = typeInfo ? typeInfo.l : 'Node';
         let subText = n.id;
         
-        if (n.type === 'dataNode' && n.data.fileName) subText = n.data.fileName;
+        if ((n.type === 'dataNode' || n.type === 'folderSourceNode') && n.data.fileName) subText = n.data.fileName;
+        else if (n.type === 'webSourceNode' && n.data.fetchedUrl) subText = "Loaded";
         else if (n.type === 'filterNode' && n.data.filterCol) subText = `${n.data.filterCol} ${n.data.matchType} ${n.data.filterVal || ''}`;
         else if (n.type === 'chartNode' && n.data.chartType) subText = `${n.data.chartType} chart`;
-        else if (n.type === 'transformNode' && n.data.targetCol) subText = `${n.data.command === 'case_when' ? 'CASE WHEN' : (n.data.command || '...')} on ${n.data.targetCol}`;
+        else if (n.type === 'transformNode' && (n.data.targetCol || n.data.command === 'remove_duplicates')) subText = `${n.data.command === 'case_when' ? 'CASE WHEN' : (n.data.command || '...')} on ${n.data.targetCol || 'All'}`;
         else if (n.type === 'sortNode' && n.data.sortCol) subText = `${n.data.sortCol} ${n.data.sortOrder}`;
         else if (n.type === 'groupByNode' && n.data.groupCol) subText = `By ${n.data.groupCol}`;
         else if (n.type === 'selectNode' && n.data.selectedColumns) subText = `${n.data.selectedColumns.length} cols selected`;
-        else if (n.type === 'joinNode' || n.type === 'unionNode') subText = "Merge Data";
-        else if (n.type === 'dataNode' && n.data.useFirstRowAsHeader) subText = "Setup Required";
+        else if (n.type === 'joinNode' || n.type === 'unionNode' || n.type === 'minusNode') subText = "Merge Data";
+        else if (n.type === 'vlookupNode' && n.data.targetCol) subText = `Add ${n.data.targetCol}`;
+        else if ((n.type === 'dataNode' || n.type === 'folderSourceNode') && n.data.useFirstRowAsHeader) subText = "Setup Required";
 
         return (
           <button 
             key={n.id} 
-            onClick={() => setCenter(n.position.x + CAMERA_OFFSET_X, n.position.y + CAMERA_OFFSET_Y, { zoom: 1.2, duration: 800 })} 
+            onClick={() => focusNode(n.id, true)} 
             className="text-left flex items-center gap-3 p-2 hover:bg-[#333] rounded-lg transition-all group border border-transparent hover:border-[#555] active:scale-95"
           >
             <div className={`w-6 h-6 shrink-0 rounded flex items-center justify-center bg-[#1a1a1a] border border-[#444] ${typeInfo?.c || 'text-white'}`}>
@@ -536,7 +922,7 @@ const FlowBuilder = () => {
   const [workbooks, setWorkbooks] = useState<Record<string, XLSX.WorkBook>>({});
   const [rangeModalNode, setRangeModalNode] = useState<string | null>(null);
   
-  const { screenToFlowPosition, setCenter } = useReactFlow();
+  const { screenToFlowPosition, setCenter, getZoom, getNode } = useReactFlow();
   
   const [nodes, _setNodes, onNodesChange] = useNodesState<CustomNode>([{ id: 'n-1', type: 'dataNode', position: { x: 50, y: 150 }, data: { useFirstRowAsHeader: true } }]);
   const [edges, _setEdges, onEdgesChange] = useEdgesState<Edge>([]);
@@ -554,13 +940,25 @@ const FlowBuilder = () => {
   const [isAutoCameraMove, setIsAutoCameraMove] = useState(true);
   const [previewNodeId, setPreviewNodeId] = useState<string | null>(null);
 
+  const focusNode = useCallback((nodeId: string, force: boolean = false) => {
+    if (!isAutoCameraMove && !force) return;
+    
+    setTimeout(() => {
+      const n = getNode(nodeId) as CustomNode | undefined;
+      if (n) {
+        const h = n.measured?.height || 150;
+        setCenter(n.position.x + CAMERA_OFFSET_X, n.position.y + h / 2, { zoom: getZoom(), duration: 1200 });
+      }
+    }, 50);
+  }, [isAutoCameraMove, getNode, setCenter, getZoom]);
+
   useEffect(() => {
     const local = localStorage.getItem('bi-architect-flows');
     if (local) setSavedFlows(JSON.parse(local));
   }, []);
 
   const handleSave = (name: string) => { const up = [...savedFlows, { id: Date.now().toString(), name, updatedAt: new Date().toLocaleString(), flow: { nodes, edges } }]; setSavedFlows(up); localStorage.setItem('bi-architect-flows', JSON.stringify(up)); };
-  const handleLoad = (f: any) => { _setNodes(f.flow.nodes.map((n: any) => n.type === 'dataNode' && n.data.fileName ? { ...n, data: { ...n.data, needsUpload: true } } : n)); _setEdges(f.flow.edges || []); setWorkbooks({}); };
+  const handleLoad = (f: any) => { _setNodes(f.flow.nodes.map((n: any) => (n.type === 'dataNode' || n.type === 'folderSourceNode') && n.data.fileName ? { ...n, data: { ...n.data, needsUpload: true } } : n)); _setEdges(f.flow.edges || []); setWorkbooks({}); };
   const onEdgeContextMenu = useCallback((e: React.MouseEvent, edge: Edge) => { e.preventDefault(); _setEdges((eds: any) => eds.filter((e: any) => e.id !== edge.id)); }, [_setEdges]);
 
   const handleReset = () => {
@@ -568,6 +966,7 @@ const FlowBuilder = () => {
     _setEdges([]);
     setWorkbooks({});
     setIsResetModalOpen(false);
+    setCenter(50 + CAMERA_OFFSET_X, 150 + 75, { zoom: 0.9, duration: 1200 });
   };
   
   const handleDeleteFlow = (id: string) => {
@@ -596,7 +995,7 @@ const FlowBuilder = () => {
   const nodeFlowData = useMemo(() => {
     const map: Record<string, any> = {};
     nodes.forEach(n => {
-      if (n.type === 'joinNode' || n.type === 'unionNode') {
+      if (n.type === 'joinNode' || n.type === 'unionNode' || n.type === 'minusNode' || n.type === 'vlookupNode') {
         const eA = edges.find(e => e.target === n.id && (e as any).targetHandle === 'input-a'), eB = edges.find(e => e.target === n.id && (e as any).targetHandle === 'input-b');
         const hA = eA ? calcData(eA.source, nodes, edges, workbooks).headers : [], hB = eB ? calcData(eB.source, nodes, edges, workbooks).headers : [];
         map[n.id] = { headersA: hA, headersB: hB, incomingHeaders: [...new Set([...hA, ...hB])] };
@@ -636,36 +1035,40 @@ const FlowBuilder = () => {
   };
 
   const tList = [
-    { t: 'dataNode', l: 'Source', i: Icons.Source, c: 'text-blue-400' },
-    { t: 'unionNode', l: 'Union', i: Icons.Union, c: 'text-blue-400' },
-    { t: 'joinNode', l: 'Join', i: Icons.Join, c: 'text-blue-400' },
-    { t: 'groupByNode', l: 'Group By', i: Icons.GroupBy, c: 'text-blue-400' },
-    { t: 'sortNode', l: 'Sort', i: Icons.Sort, c: 'text-blue-400' },
-    { t: 'transformNode', l: 'Transform', i: Icons.Transform, c: 'text-blue-400' },
-    { t: 'selectNode', l: 'Select', i: Icons.Select, c: 'text-blue-400' },
-    { t: 'filterNode', l: 'Filter', i: Icons.Filter, c: 'text-blue-400' },
-    { t: 'chartNode', l: 'Visualizer', i: Icons.Chart, c: 'text-blue-400' }
+    { t: 'dataNode', l: 'Source', i: Icons.Source, c: 'text-blue-400', desc: 'CSVやExcelファイルを選択して読み込みます。' },
+    { t: 'folderSourceNode', l: 'Auto Folder', i: Icons.FolderAuto, c: 'text-indigo-400', desc: '指定フォルダを監視し、中の最新ファイルを自動で読み込みます。' },
+    { t: 'webSourceNode', l: 'Web Source', i: Icons.Web, c: 'text-emerald-400', desc: 'URLからAPI(JSON)やCSV、Webページの表(HTML)を取得します。' },
+    { t: 'unionNode', l: 'Union', i: Icons.Union, c: 'text-blue-400', desc: '2つのデータを「縦」に繋ぎ合わせます。(データの追加)' },
+    { t: 'joinNode', l: 'Join', i: Icons.Join, c: 'text-blue-400', desc: '2つのデータを共通のキーで「横」に繋ぎます。' },
+    { t: 'vlookupNode', l: 'VLOOKUP', i: Icons.Vlookup, c: 'text-pink-400', desc: '別データから一致するキーを検索し、特定の列の値を新しい列として追加します。' },
+    { t: 'minusNode', l: 'Minus', i: Icons.Minus, c: 'text-rose-500', desc: '上のデータから下のデータに存在するレコードを差し引きます。' },
+    { t: 'groupByNode', l: 'Group By', i: Icons.GroupBy, c: 'text-blue-400', desc: '指定したキーでデータをグループ化し、合計や件数を集計します。' },
+    { t: 'sortNode', l: 'Sort', i: Icons.Sort, c: 'text-blue-400', desc: '指定した列を基準に、データを昇順・降順に並び替えます。' },
+    { t: 'transformNode', l: 'Transform', i: Icons.Transform, c: 'text-blue-400', desc: 'データの内容を書き換えたり、型変換や0埋めなどを行うクレンジングノードです。' },
+    { t: 'selectNode', l: 'Select', i: Icons.Select, c: 'text-blue-400', desc: '必要な列(カラム)だけを選んで残し、不要な列を削除します。' },
+    { t: 'filterNode', l: 'Filter', i: Icons.Filter, c: 'text-blue-400', desc: '条件に一致する行だけを抽出します。(例: 売上1000以上)' },
+    { t: 'chartNode', l: 'Visualizer', i: Icons.Chart, c: 'text-blue-400', desc: 'データをグラフ化します。Dashboardタブで一覧表示できます。' }
   ];
 
   return (
-    <AppContext.Provider value={{ workbooks, setWorkbooks, setRangeModalNode, nodeFlowData, isAutoCameraMove }}>
+    <AppContext.Provider value={{ workbooks, setWorkbooks, setRangeModalNode, nodeFlowData, isAutoCameraMove, focusNode }}>
       <div className="h-screen w-screen bg-[#1a1a1a] flex flex-col font-sans overflow-hidden">
         <GlobalStyle />
-        <div className="bg-[#181818] border-b border-[#333] px-6 py-3 flex justify-between items-center z-40 shadow-md gap-4">
+        <div className="bg-[#181818] border-b border-[#333] px-6 py-3 flex justify-between items-center z-40 shadow-md gap-4 no-print">
           <h1 className="text-[13px] font-bold text-white tracking-[0.5em] uppercase flex items-center gap-3 shrink-0">
             <span className="text-blue-500 w-4 h-4 flex items-center justify-center">{Icons.Diamond}</span>
             BI Architect
           </h1>
           
           <div className="flex-1 flex justify-center">
-            <div className="bg-[#1e1e1e] border border-[#333] px-4 py-1.5 rounded-full text-white text-[10px] tracking-widest uppercase font-bold flex items-center gap-2">
-              <span className="text-blue-500">{Icons.Diamond}</span> Drag & Drop Nodes to Build Pipeline
+            <div className="bg-[#1e1e1e] border border-[#333] px-4 py-1.5 rounded-full text-[#aaa] text-[10px] tracking-widest font-bold flex items-center gap-2">
+              <span className="text-blue-500">{Icons.Diamond}</span> ノードを繋いで構築 <span className="text-[#555] mx-1">|</span> 接続線は右クリックで削除
             </div>
           </div>
 
           <div className="flex items-center gap-3 shrink-0">
             <button onClick={() => setIsAutoCameraMove(!isAutoCameraMove)} className={`bg-[#252526] hover:bg-[#333] border border-[#444] ${isAutoCameraMove ? 'text-blue-400' : 'text-[#666]'} text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-2 shadow active:scale-95 transition-colors`} title="Auto Camera Focus">
-              <span className="flex items-center justify-center gap-1.5">{Icons.Focus} {isAutoCameraMove ? 'FOCUS: ON' : 'FOCUS: OFF'}</span>
+              <span className="flex items-center justify-center gap-1.5">{Icons.Focus} {isAutoCameraMove ? 'Camera Focus: ON' : 'Camera Focus: OFF'}</span>
             </button>
             
             <button onClick={() => setIsSqlModalOpen(true)} className="bg-[#252526] hover:bg-blue-900/30 border border-[#444] hover:border-blue-500/50 text-[#aaa] hover:text-blue-400 text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-1.5 shadow active:scale-95 transition-colors">
@@ -679,8 +1082,8 @@ const FlowBuilder = () => {
             </button>
           </div>
         </div>
-        <div className="flex-1 flex overflow-hidden relative">
-          <aside className={`bg-[#181818] border-r border-[#333] z-20 flex flex-col transition-all duration-300 ease-in-out ${isSidebarOpen ? 'w-56 py-4 pl-4 pr-2' : 'w-16 p-2 items-center'}`}>
+        <div className="flex-1 flex overflow-hidden relative no-print">
+          <aside className={`bg-[#181818] border-r border-[#333] z-20 flex flex-col transition-all duration-300 ease-in-out ${isSidebarOpen ? 'w-64 py-4 pl-4 pr-2' : 'w-16 p-2 items-center'}`}>
             <div className={`flex items-center ${isSidebarOpen ? 'justify-between mb-4 pr-2' : 'justify-center mb-6'} border-b border-[#333] pb-2`}>
               {isSidebarOpen && <div className="text-[10px] font-bold text-white tracking-[0.3em] uppercase">Toolbox</div>}
               <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="text-[#888] hover:text-white p-1 rounded hover:bg-[#333] transition-colors flex items-center justify-center w-6 h-6">
@@ -689,9 +1092,13 @@ const FlowBuilder = () => {
             </div>
             <div className={`flex flex-col ${isSidebarOpen ? 'gap-3 pr-2' : 'gap-4'} overflow-y-auto overflow-x-hidden pb-10 custom-scrollbar`}>
               {tList.map(item => (
-                <div key={item.t} className={`bg-[#252526] border border-[#333] rounded-xl hover:border-blue-500 cursor-grab flex items-center transition-all shadow-md active:scale-95 group ${isSidebarOpen ? 'p-3 gap-4' : 'p-3 justify-center w-12 h-12'}`} onDragStart={(e) => e.dataTransfer.setData('application/reactflow', item.t)} draggable title={!isSidebarOpen ? item.l : ''}>
-                  <div className={`${item.c} text-lg group-hover:scale-125 transition-transform ${isSidebarOpen ? '' : 'text-xl'}`}>{item.i}</div>
-                  {isSidebarOpen && <span className="text-[10px] text-[#888] font-bold uppercase tracking-wider group-hover:text-white truncate">{item.l}</span>}
+                <div key={item.t} className={`relative group/btn bg-[#252526] border border-[#333] rounded-xl hover:border-blue-500 cursor-grab flex items-center transition-all shadow-md active:scale-95 ${isSidebarOpen ? 'p-3 gap-4' : 'p-3 justify-center w-12 h-12'}`} onDragStart={(e) => e.dataTransfer.setData('application/reactflow', item.t)} draggable>
+                  <div className={`${item.c} text-lg group-hover/btn:scale-125 transition-transform ${isSidebarOpen ? '' : 'text-xl'}`}>{item.i}</div>
+                  {isSidebarOpen && <span className="text-[10px] text-[#888] font-bold uppercase tracking-wider group-hover/btn:text-white truncate">{item.l}</span>}
+                  <div className="absolute left-full ml-4 top-1/2 -translate-y-1/2 w-56 bg-[#111] text-[#ccc] text-[11px] p-3 rounded-lg border border-[#444] opacity-0 group-hover/btn:opacity-100 pointer-events-none transition-opacity z-50 shadow-2xl hidden md:block normal-case leading-relaxed">
+                    <div className="text-white font-bold mb-1 tracking-widest">{item.l}</div>
+                    {item.desc}
+                  </div>
                 </div>
               ))}
             </div>
@@ -706,22 +1113,19 @@ const FlowBuilder = () => {
               onEdgeContextMenu={onEdgeContextMenu} 
               nodeTypes={nodeTypesObj} 
               onNodeDragStop={(_, node: any) => {
-                if (isAutoCameraMove) {
-                  setCenter(node.position.x + CAMERA_OFFSET_X, node.position.y + CAMERA_OFFSET_Y, { zoom: 1.1, duration: 600 });
-                }
+                focusNode(node.id);
               }}
               onDrop={(e) => { 
                 const t = e.dataTransfer.getData('application/reactflow'); 
                 if (t) {
                   const position = screenToFlowPosition({ x: e.clientX, y: e.clientY });
-                  _setNodes((nds: any) => nds.concat({ id: `n-${Date.now()}`, type: t, position, data: { useFirstRowAsHeader: true } })); 
-                  if (isAutoCameraMove) {
-                    setCenter(position.x + CAMERA_OFFSET_X, position.y + CAMERA_OFFSET_Y, { zoom: 1.1, duration: 600 });
-                  }
+                  const id = `n-${Date.now()}`;
+                  _setNodes((nds: any) => nds.concat({ id, type: t, position, data: { useFirstRowAsHeader: true } })); 
+                  focusNode(id);
                 }
               }} 
               onDragOver={(e) => e.preventDefault()} 
-              fitView
+              defaultViewport={{ x: 250, y: 100, zoom: 0.9 }}
             >
               <Background color="#333" gap={24} size={1} />
               <Controls />
@@ -737,11 +1141,11 @@ const FlowBuilder = () => {
           {isPreviewOpen && (
             <div 
               onMouseDown={startResize} 
-              className="absolute top-[-3px] left-0 w-full h-2 cursor-row-resize z-50 hover:bg-blue-500/50 transition-colors" 
+              className="absolute top-[-3px] left-0 w-full h-2 cursor-row-resize z-50 hover:bg-blue-500/50 transition-colors no-print" 
               title="Drag to resize"
             />
           )}
-          <div className="px-6 py-2 bg-[#252526] flex justify-between items-center border-b border-[#333] h-[48px] shrink-0">
+          <div className="px-6 py-2 bg-[#252526] flex justify-between items-center border-b border-[#333] h-[48px] shrink-0 no-print">
             <div className="flex items-center gap-4">
               <button onClick={() => setIsPreviewOpen(!isPreviewOpen)} className="text-[#888] hover:text-white p-1 rounded hover:bg-[#333] transition-colors mr-2 flex items-center justify-center w-6 h-6">
                 {isPreviewOpen ? Icons.ChevronDown : Icons.ChevronUp}
@@ -772,7 +1176,8 @@ const FlowBuilder = () => {
                       const typeInfo = tList.find(t => t.t === n.type);
                       const label = typeInfo ? typeInfo.l : n.type;
                       let sub = n.id;
-                      if (n.type === 'dataNode' && n.data.fileName) sub = n.data.fileName;
+                      if ((n.type === 'dataNode' || n.type === 'folderSourceNode') && n.data.fileName) sub = n.data.fileName;
+                      else if (n.type === 'webSourceNode' && n.data.fetchedUrl) sub = "Loaded";
                       return <option key={n.id} value={n.id}>{label} - {sub}</option>
                     })}
                   </select>
@@ -783,14 +1188,14 @@ const FlowBuilder = () => {
                 <>
                   <span className="text-[10px] text-white uppercase font-bold tracking-widest mr-2">Export As:</span>
                   <button onClick={() => handleExport('csv')} className="bg-[#333] hover:bg-blue-600 text-white text-[10px] px-3 py-1.5 rounded-lg font-bold uppercase tracking-widest transition-colors shadow">CSV</button>
-                  <button onClick={() => handleExport('xlsx')} className="bg-[#333] hover:bg-blue-600 text-white text-[10px] px-3 py-1.5 rounded-lg font-bold uppercase tracking-widest transition-colors shadow">Excel</button>
+                  <button onClick={() => handleExport('xlsx')} className="bg-[#333] hover:bg-green-600 text-white text-[10px] px-3 py-1.5 rounded-lg font-bold uppercase tracking-widest transition-colors shadow">Excel</button>
                 </>
               )}
               {previewTab !== 'dashboard' && <span className="text-[10px] text-blue-400 font-bold ml-4">{final.data.length} rows</span>}
             </div>
           </div>
           {isPreviewOpen && (
-            <div className="flex-1 overflow-auto bg-[#1e1e1e]">
+            <div className="flex-1 overflow-auto bg-[#1e1e1e] print-preview-area">
               {previewTab === 'table' && (
                 <table className="w-full text-left text-[11px] whitespace-nowrap border-collapse"><thead className="bg-[#1a1a1a] sticky top-0 border-b border-[#333] z-10 shadow-sm"><tr>{final.headers.map((h, i) => <th key={i} className="px-5 py-3 font-bold text-[#888] border-r border-[#333] uppercase tracking-wider">{h}</th>)}</tr></thead><tbody>{final.data.slice(0, 100).map((row, i) => (<tr key={i} className="hover:bg-[#252526] transition-colors border-b border-[#222]">{final.headers.map((h, j) => <td key={j} className="px-5 py-2 text-[#ccc] border-r border-[#222] font-mono">{row[h]}</td>)}</tr>))}</tbody></table>
               )}
@@ -847,7 +1252,7 @@ const FlowBuilder = () => {
         <SaveLoadModal isOpen={isSaveLoadOpen} onClose={() => setIsSaveLoadOpen(false)} onSave={handleSave} onLoad={handleLoad} onDelete={handleDeleteFlow} flows={savedFlows} />
 
         {isResetModalOpen && (
-          <div className="fixed inset-0 bg-black/80 z-[300] flex items-center justify-center p-8 backdrop-blur-sm">
+          <div className="fixed inset-0 bg-black/80 z-[300] flex items-center justify-center p-8 backdrop-blur-sm no-print">
             <div className="bg-[#1e1e1e] border border-[#444] rounded-2xl shadow-2xl w-[320px] p-6 text-center space-y-6">
               <div className="text-white text-4xl w-10 h-10 mx-auto flex items-center justify-center">{Icons.Warning}</div>
               <div className="space-y-2">
@@ -890,22 +1295,68 @@ const SqlModal = ({ isOpen, onClose, nodes, edges, onImport }: any) => {
     let select = "*", from = "source_data", joinStr = "", wheres: string[] = [], groupBy = "", orderBy = "";
     
     path.forEach((n: any) => {
-      if (n.type === 'dataNode') {
+      if (n.type === 'dataNode' || n.type === 'folderSourceNode') {
         from = n.data.fileName ? `\`${n.data.fileName}\`` : "source_data";
         if (n.data.ranges && n.data.ranges.length > 0) {
           from += ` /* Range: ${n.data.ranges.join(', ')} */`;
         }
+      } else if (n.type === 'webSourceNode') {
+        from = n.data.fetchedUrl ? `\`${n.data.fetchedUrl}\`` : "web_data";
       }
+      
       if (n.type === 'joinNode' && n.data.keyA && n.data.keyB) {
         const jType = n.data.joinType === 'left' ? 'LEFT' : n.data.joinType === 'right' ? 'RIGHT' : 'INNER';
-        joinStr = `\n${jType} JOIN sub_data ON \`${n.data.keyA}\` = sub_data.\`${n.data.keyB}\``;
+        joinStr += `\n${jType} JOIN sub_data ON \`${n.data.keyA}\` = sub_data.\`${n.data.keyB}\``;
       }
+
+      if (n.type === 'vlookupNode' && n.data.keyA && n.data.keyB && n.data.fetchCol && n.data.targetCol) {
+        joinStr += `\nLEFT JOIN sub_data ON \`${n.data.keyA}\` = sub_data.\`${n.data.keyB}\``;
+        select = select === "*" ? `*, sub_data.\`${n.data.fetchCol}\` AS \`${n.data.targetCol}\`` : `${select}, sub_data.\`${n.data.fetchCol}\` AS \`${n.data.targetCol}\``;
+      }
+      
+      if (n.type === 'minusNode' && n.data.keyA && n.data.keyB) {
+        joinStr += `\nLEFT JOIN sub_data ON \`${n.data.keyA}\` = sub_data.\`${n.data.keyB}\``;
+        wheres.push(`sub_data.\`${n.data.keyB}\` IS NULL`);
+      }
+
       if (n.type === 'selectNode' && n.data.selectedColumns?.length) select = n.data.selectedColumns.map((c: string) => `\`${c}\``).join(", ");
       
-      if (n.type === 'transformNode' && n.data.command === 'case_when' && n.data.targetCol) {
-        const op = n.data.condOp === 'gt' ? '>' : n.data.condOp === 'lt' ? '<' : n.data.condOp === 'not' ? '!=' : '=';
-        const cWhen = `CASE WHEN \`${n.data.targetCol}\` ${op} '${n.data.condVal || ''}' THEN '${n.data.trueVal || ''}' ELSE '${n.data.falseVal || ''}' END AS \`${n.data.targetCol}\``;
-        select = select === "*" ? `*, ${cWhen}` : `${select}, ${cWhen}`;
+      if (n.type === 'transformNode' && n.data.command) {
+        if (n.data.command === 'case_when' && n.data.targetCol) {
+          const op = n.data.condOp === 'gt' ? '>' : n.data.condOp === 'lt' ? '<' : n.data.condOp === 'not' ? '!=' : '=';
+          const cWhen = `CASE WHEN \`${n.data.targetCol}\` ${op} '${n.data.condVal || ''}' THEN '${n.data.trueVal || ''}' ELSE '${n.data.falseVal || ''}' END AS \`${n.data.targetCol}\``;
+          select = select === "*" ? `*, ${cWhen}` : `${select}, ${cWhen}`;
+        } else if (n.data.command === 'remove_duplicates') {
+          select = `DISTINCT ${select}`;
+        } else if (n.data.targetCol) {
+          let func = '';
+          if (n.data.command === 'to_string') func = `CAST(\`${n.data.targetCol}\` AS CHAR)`;
+          if (n.data.command === 'to_number') func = `CAST(\`${n.data.targetCol}\` AS DECIMAL)`;
+          if (n.data.command === 'fill_zero') func = `COALESCE(\`${n.data.targetCol}\`, 0)`;
+          if (n.data.command === 'zero_padding') func = `LPAD(\`${n.data.targetCol}\`, ${n.data.param0 || 1}, '0')`;
+          if (n.data.command === 'replace') func = `REPLACE(\`${n.data.targetCol}\`, '${n.data.param0 || ""}', '')`;
+          if (n.data.command === 'math_mul') func = `\`${n.data.targetCol}\` * ${n.data.param0 || 1}`;
+          if (n.data.command === 'add_suffix') func = `CONCAT(\`${n.data.targetCol}\`, '${n.data.param0 || ""}')`;
+          if (n.data.command === 'concat') func = `CONCAT(\`${n.data.targetCol}\`, '${n.data.param0 || ""}')`;
+          if (n.data.command === 'round') func = `ROUND(\`${n.data.targetCol}\`, ${n.data.param0 || 0})`;
+          if (n.data.command === 'mod') func = `MOD(\`${n.data.targetCol}\`, ${n.data.param0 || 1})`;
+          if (n.data.command === 'substring') {
+            const params = String(n.data.param0 || '1').split(',').map(s => s.trim());
+            const start = params[0] || '1';
+            const len = params.length > 1 ? params[1] : '255';
+            func = `SUBSTRING(\`${n.data.targetCol}\`, ${start}, ${len})`;
+          }
+
+          if (func) {
+             if (n.data.applyCond && n.data.condCol && n.data.condOp) {
+                 const op = n.data.condOp === 'gt' ? '>' : n.data.condOp === 'lt' ? '<' : n.data.condOp === 'not' ? '!=' : '=';
+                 const val = n.data.condOp === 'includes' ? `'%${n.data.condVal || ''}%'` : `'${n.data.condVal || ''}'`;
+                 const actualOp = n.data.condOp === 'includes' ? 'LIKE' : op;
+                 func = `CASE WHEN \`${n.data.condCol}\` ${actualOp} ${val} THEN ${func} ELSE \`${n.data.targetCol}\` END`;
+             }
+             select = select === "*" ? `*, ${func} AS \`${n.data.targetCol}\`` : `${select}, ${func} AS \`${n.data.targetCol}\``;
+          }
+        }
       }
 
       if (n.type === 'filterNode' && n.data.filterCol && n.data.filterVal) {
@@ -1007,7 +1458,7 @@ const SqlModal = ({ isOpen, onClose, nodes, edges, onImport }: any) => {
 
   if (!isOpen) return null;
   return (
-    <div className="fixed inset-0 bg-black/90 z-[200] flex items-center justify-center p-8 backdrop-blur-md">
+    <div className="fixed inset-0 bg-black/90 z-[200] flex items-center justify-center p-8 backdrop-blur-md no-print">
       <div className="bg-[#1e1e1e] border border-[#444] rounded-2xl shadow-2xl w-[600px] overflow-hidden flex flex-col">
         <div className="flex border-b border-[#444]">
           <button onClick={() => setTab('export')} className={`flex-1 p-4 text-[11px] font-bold uppercase tracking-widest transition-colors flex items-center justify-center gap-2 ${tab === 'export' ? 'bg-[#252526] text-blue-400 border-b-2 border-blue-400' : 'text-[#666] hover:bg-[#252526]'}`}><span>{Icons.Code}</span> Flow to SQL</button>
@@ -1044,7 +1495,7 @@ const SaveLoadModal = ({ isOpen, onClose, onSave, onLoad, onDelete, flows }: any
 
   if (!isOpen) return null;
   return (
-    <div className="fixed inset-0 bg-black/90 z-[200] flex items-center justify-center p-8 backdrop-blur-md">
+    <div className="fixed inset-0 bg-black/90 z-[200] flex items-center justify-center p-8 backdrop-blur-md no-print">
       <div className="bg-[#1e1e1e] border border-[#444] rounded-2xl shadow-2xl w-[500px] overflow-hidden">
         <div className="flex border-b border-[#444]"><button onClick={() => setTab('load')} className={`flex-1 p-3 text-[11px] font-bold uppercase tracking-widest transition-colors flex items-center justify-center gap-2 ${tab === 'load' ? 'bg-[#252526] text-blue-400 border-b-2 border-blue-400' : 'text-[#666] hover:bg-[#252526]'}`}><span>{Icons.Folder}</span> Load</button><button onClick={() => setTab('save')} className={`flex-1 p-3 text-[11px] font-bold uppercase tracking-widest transition-colors flex items-center justify-center gap-2 ${tab === 'save' ? 'bg-[#252526] text-white border-b-2 border-white' : 'text-[#666] hover:bg-[#252526]'}`}><span>{Icons.Save}</span> Save</button></div>
         <div className="p-6 h-[300px] overflow-y-auto bg-[#1a1a1a] custom-scrollbar">
@@ -1092,12 +1543,12 @@ const RangeSelectorModal = ({ isOpen, onClose, workbook, currentSheet, onRangesC
   const cols = useMemo(() => sData.length > 0 ? Array.from({ length: Math.max(...sData.map(r => r.length)) }, (_, i) => XLSX.utils.encode_col(i)) : [], [sData]);
   if (!isOpen) return null;
   return (
-    <div className="fixed inset-0 bg-black/95 z-[100] flex items-center justify-center p-12 backdrop-blur-md">
+    <div className="fixed inset-0 bg-black/95 z-[100] flex items-center justify-center p-12 backdrop-blur-md no-print">
       <div className="bg-[#1e1e1e] border border-[#444] rounded-3xl shadow-2xl w-full h-full flex flex-col overflow-hidden ring-1 ring-white/10">
         <div className="p-4 bg-[#1a1a1a] border-b border-[#444] flex flex-col font-sans">
           <div className="flex justify-between items-center mb-2">
             <h2 className="text-[12px] font-bold text-white uppercase tracking-[0.4em] flex items-center gap-2">
-              <span className="text-blue-500">{Icons.Select}</span> Visual Range Selection
+              <span className="text-blue-500">{Icons.Select}</span> 抽出範囲の選択
             </h2>
             <div className="flex items-center gap-8">
               <div className="flex items-center gap-3">
@@ -1111,16 +1562,16 @@ const RangeSelectorModal = ({ isOpen, onClose, workbook, currentSheet, onRangesC
           </div>
           <p className="text-[#888] text-[10px] leading-relaxed">
             🖱️ 抽出したいデータの範囲を<strong>マウスでドラッグして選択</strong>してください。（複数の範囲を選択することも可能です）<br/>
-            ✅ 選択後、右側のパネルで<strong>「1行目をヘッダーとして使用する (First row as Header)」</strong>オプションをオンにすると、最初の行が列名として認識されます。
+            ✅ 選択後、右側のパネルで<strong>「1行目をヘッダーにする」</strong>オプションをオンにすると、最初の行が列名として認識されます。
           </p>
         </div>
         <div className="flex-1 flex overflow-hidden">
           <div className="flex-1 overflow-auto bg-[#1a1a1a] custom-scrollbar"><table className="border-collapse table-fixed"><thead className="sticky top-0 z-10 bg-[#252526]"><tr><th className="w-12 border-b border-[#444]"></th>{cols.map(c => <th key={c} style={{ width: cWidth }} className="px-3 py-1.5 border-r border-b border-[#444] text-[#888] text-[10px] font-bold">{c}</th>)}</tr></thead><tbody>{sData.map((row, r) => (<tr key={r}><td className="w-12 bg-[#252526] border-r border-b border-[#444] text-[#666] text-center text-[10px] font-mono">{r+1}</td>{cols.map((_, c) => { const isSel = dStart && dEnd && c >= Math.min(dStart.c, dEnd.c) && c <= Math.max(dStart.c, dEnd.c) && r >= Math.min(dStart.r, dEnd.r) && r <= Math.max(dStart.r, dEnd.r); return <td key={c} onMouseDown={() => {setDStart({c, r}); setDEnd({c, r});}} onMouseOver={() => dStart && setDEnd({c, r})} onMouseUp={() => { if(dStart && dEnd){ const range = XLSX.utils.encode_range({s:{c:Math.min(dStart.c, dEnd.c),r:Math.min(dStart.r, dEnd.r)},e:{c:Math.max(dStart.c, dEnd.c),r:Math.max(dStart.r, dEnd.r)}}); setSRanges(p => [...p, range]); setDStart(null); setDEnd(null); }}} style={{ width: cWidth }} className={`px-2 py-1.5 border-r border-b border-[#2a2a2a] truncate text-[11px] select-none cursor-crosshair ${isSel ? 'bg-blue-500/50 ring-1 ring-blue-400 ring-inset text-white' : 'text-[#aaa] hover:bg-[#222]'}`}>{row[c]}</td> })}</tr>))}</tbody></table></div>
           <div className="w-72 bg-[#252526] border-l border-[#444] p-6 flex flex-col gap-6 font-sans">
             <h3 className="text-[10px] font-bold text-[#888] uppercase border-b border-[#444] pb-3">Selection Settings</h3>
-            <label className="flex items-center gap-3 cursor-pointer group"><input type="checkbox" checked={uHead} onChange={(e) => setUHead(e.target.checked)} className="w-4 h-4 accent-blue-500" /><span className="text-[11px] text-[#ccc] group-hover:text-white uppercase font-bold transition-colors">First row as Header</span></label>
+            <label className="flex items-center gap-3 cursor-pointer group"><input type="checkbox" checked={uHead} onChange={(e) => setUHead(e.target.checked)} className="w-4 h-4 accent-blue-500" /><span className="text-[11px] text-[#ccc] group-hover:text-white uppercase font-bold transition-colors">1行目をヘッダーにする</span></label>
             <div className="flex-1 overflow-auto space-y-3 pr-2 custom-scrollbar">{sRanges.map((rs, i) => (<div key={i} className="bg-[#1a1a1a] p-3 rounded-xl border border-[#444] flex justify-between items-center group hover:border-blue-500/50 transition-colors"><div className="flex flex-col"><span className="text-[8px] text-[#555] font-bold uppercase tracking-widest">Range {i+1}</span><span className="text-[11px] text-blue-400 font-mono font-bold">{rs}</span></div><button onClick={() => setSRanges(p => p.filter((_, idx) => idx !== i))} className="text-[#555] group-hover:text-white transition-colors flex items-center justify-center w-5 h-5"><span>{Icons.Close}</span></button></div>))}</div>
-            <button onClick={() => {onRangesConfirm(sRanges, uHead); onClose();}} className="bg-blue-600 hover:bg-blue-500 py-3.5 rounded-xl text-[11px] font-bold text-white uppercase shadow-xl active:scale-95 transition-all">Apply Selection</button>
+            <button onClick={() => {onRangesConfirm(sRanges, uHead); onClose();}} className="bg-blue-600 hover:bg-blue-500 py-3.5 rounded-xl text-[11px] font-bold text-white uppercase shadow-xl active:scale-95 transition-all">選択を適用</button>
           </div>
         </div>
       </div>
