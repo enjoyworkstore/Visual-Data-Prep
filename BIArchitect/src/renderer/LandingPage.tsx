@@ -29,11 +29,8 @@ export default function LandingPage() {
           <div className="flex items-center gap-6">
             <a href="#features" className="text-sm font-semibold hover:text-white transition-colors hidden md:block">Features</a>
             <a href="#how-it-works" className="text-sm font-semibold hover:text-white transition-colors hidden md:block">How it Works</a>
-            <a href="https://github.com/your-username/visual-data-prep" target="_blank" rel="noreferrer" className="text-gray-400 hover:text-white transition-colors">
-              {Icons.Github}
-            </a>
-            <a href="#download" className="bg-blue-600 hover:bg-blue-500 text-white text-sm font-bold px-5 py-2.5 rounded-lg tracking-widest transition-all shadow-[0_0_15px_rgba(37,99,235,0.5)] flex items-center gap-2">
-              {Icons.Download} DOWNLOAD
+            <a href="#/app" className="bg-blue-600 hover:bg-blue-500 text-white text-sm font-bold px-5 py-2.5 rounded-lg tracking-widest transition-all shadow-[0_0_15px_rgba(37,99,235,0.5)] flex items-center gap-2">
+              ツールを開く {Icons.ArrowRight}
             </a>
           </div>
         </div>
@@ -41,37 +38,31 @@ export default function LandingPage() {
 
       {/* Hero Section */}
       <section className="relative pt-32 pb-20 overflow-hidden">
-        {/* Decorative background glow */}
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[400px] bg-blue-600/20 blur-[120px] rounded-full pointer-events-none"></div>
         
         <div className="max-w-6xl mx-auto px-6 relative z-10 text-center">
           <h1 className="text-5xl md:text-7xl font-extrabold text-white tracking-tight leading-tight mb-6">
             No-Code Data Reshaping <br className="hidden md:block" />
-            <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-fuchsia-400">
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-teal-400">
               & Visual SQL Building
             </span>
           </h1>
           <p className="text-lg md:text-xl text-gray-400 max-w-3xl mx-auto mb-10 leading-relaxed">
-            ドラッグ＆ドロップの直感的な操作で、CSVやWeb APIなどのデータを自由自在に結合・整形。複雑なデータ処理パイプラインやSQLクエリを誰でも手軽に構築できるデスクトップツールです。
+            ドラッグ＆ドロップの直感的な操作で、CSVやWeb APIなどのデータを自由自在に結合・整形・計算。複雑なデータ処理パイプラインやSQLクエリを誰でも手軽に構築できるツールです。
           </p>
           <div className="flex flex-col sm:flex-row justify-center items-center gap-4">
-            <a href="#download" className="bg-blue-600 hover:bg-blue-500 text-white text-sm font-bold px-8 py-4 rounded-xl tracking-widest transition-all shadow-[0_0_20px_rgba(37,99,235,0.4)] flex items-center gap-2 w-full sm:w-auto justify-center">
-              {Icons.Download} WINDOWS版を無料ダウンロード
-            </a>
-            <a href="#how-it-works" className="bg-gray-800 hover:bg-gray-700 text-white text-sm font-bold px-8 py-4 rounded-xl tracking-widest transition-all flex items-center gap-2 border border-gray-700 w-full sm:w-auto justify-center">
-              使い方を見る {Icons.ArrowRight}
+            <a href="#/app" className="bg-blue-600 hover:bg-blue-500 text-white text-sm font-bold px-8 py-4 rounded-xl tracking-widest transition-all shadow-[0_0_20px_rgba(37,99,235,0.4)] flex items-center gap-2 w-full sm:w-auto justify-center hover:scale-105">
+               今すぐブラウザで使ってみる {Icons.ArrowRight}
             </a>
           </div>
 
-          {/* App Mockup Placeholder */}
           <div className="mt-20 relative mx-auto max-w-5xl">
             <div className="rounded-2xl border border-gray-800 bg-[#1e1e1e] p-2 shadow-2xl relative">
               <div className="absolute inset-0 bg-gradient-to-t from-[#0B0F19] via-transparent to-transparent z-20 rounded-2xl pointer-events-none"></div>
-              {/* ここにアプリのスクショ画像を配置します */}
               <img 
-                src="https://placehold.co/1200x675/1e1e1e/38bdf8?text=App+Screenshot+Here" 
+                src="https://images.unsplash.com/photo-1551288049-bebda4e38f71?q=80&w=2070&auto=format&fit=crop" 
                 alt="Visual Data Prep Screenshot" 
-                className="w-full rounded-xl opacity-90 border border-gray-800"
+                className="w-full rounded-xl opacity-90 border border-gray-800 object-cover h-[500px]"
               />
             </div>
           </div>
@@ -89,7 +80,7 @@ export default function LandingPage() {
           <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-8">
             {[
               { i: Icons.Layout, t: "直感的なノーコードUI", d: "ノードをキャンバスに配置して線で繋ぐだけ。プログラミングの知識は一切不要です。" },
-              { i: Icons.Database, t: "多彩なデータソース", d: "ローカルのCSV/Excelだけでなく、フォルダ自動監視やWeb APIからの直接取得に対応。" },
+              { i: Icons.Database, t: "多彩なデータソース", d: "ローカルのCSV/Excelだけでなく、フォルダ自動監視やコピペ入力にも対応。" },
               { i: Icons.Zap, t: "強力なクレンジング", d: "VLOOKUP的な結合、文字列抽出、ゼロ埋め、四則演算まで豊富な変換ノードを搭載。" },
               { i: Icons.Code, t: "SQLの相互変換", d: "作成したフローからSELECT文を自動生成。逆にSQLからノードを自動配置することも可能。" }
             ].map((f, idx) => (
@@ -132,24 +123,18 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* CTA / Download */}
-      <section id="download" className="py-24 bg-gradient-to-b from-[#0B0F19] to-[#080B13] border-t border-gray-900">
+      {/* CTA */}
+      <section className="py-24 bg-gradient-to-b from-[#0B0F19] to-[#080B13] border-t border-gray-900">
         <div className="max-w-4xl mx-auto px-6 text-center">
           <div className="w-20 h-20 bg-blue-600/20 rounded-full flex items-center justify-center text-blue-400 mx-auto mb-6 border border-blue-500/30">
             <span className="text-4xl">{Icons.Diamond}</span>
           </div>
           <h2 className="text-3xl md:text-5xl font-bold text-white mb-6">さあ、データを整えよう</h2>
-          <p className="text-gray-400 mb-10 text-lg">面倒なExcel作業やSQLの記述から解放されます。<br/>完全無料で全機能をご利用いただけます。</p>
+          <p className="text-gray-400 mb-10 text-lg">ブラウザ上でそのまま体験できます。インストールや登録は不要です。</p>
           
-          <div className="flex flex-col sm:flex-row justify-center gap-4">
-            <a href="https://www.vector.co.jp/soft/..." target="_blank" rel="noreferrer" className="bg-blue-600 hover:bg-blue-500 text-white text-sm font-bold px-8 py-4 rounded-xl tracking-widest transition-all shadow-[0_0_20px_rgba(37,99,235,0.4)] flex items-center justify-center gap-2">
-              {Icons.Download} Vectorからダウンロード
-            </a>
-            <a href="https://github.com/your-username/visual-data-prep/releases" target="_blank" rel="noreferrer" className="bg-gray-800 hover:bg-gray-700 text-white text-sm font-bold px-8 py-4 rounded-xl tracking-widest transition-all flex items-center justify-center gap-2 border border-gray-700">
-              {Icons.Github} GitHub Releases
-            </a>
-          </div>
-          <p className="text-xs text-gray-600 mt-6 tracking-wider">対応OS: Windows 10 / 11 (64bit)</p>
+          <a href="#/app" className="inline-flex bg-blue-600 hover:bg-blue-500 text-white text-sm font-bold px-10 py-5 rounded-xl tracking-widest transition-all shadow-[0_0_30px_rgba(37,99,235,0.4)] items-center gap-2 hover:scale-105">
+            ツールを起動する {Icons.ArrowRight}
+          </a>
         </div>
       </section>
 
