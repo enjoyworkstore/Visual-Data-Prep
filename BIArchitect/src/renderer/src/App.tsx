@@ -1356,6 +1356,7 @@ const FlowBuilder = () => {
   const [isSaveLoadOpen, setIsSaveLoadOpen] = useState(false);
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
   const [isSqlModalOpen, setIsSqlModalOpen] = useState(false);
+  const [isAutoLayoutConfirmOpen, setIsAutoLayoutConfirmOpen] = useState(false);
   
   const [showTutorial, setShowTutorial] = useState(() => !localStorage.getItem('bi-architect-visited'));
   
@@ -1364,12 +1365,18 @@ const FlowBuilder = () => {
   const [savedFlows, setSavedFlows] = useState<any[]>([]);
   const [bottomHeight, setBottomHeight] = useState(300);
   const [isDragging, setIsDragging] = useState(false);
+  const [isNodeDragging, setIsNodeDragging] = useState(false);
+  const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
+  const [isTrashHover, setIsTrashHover] = useState(false);
+  const trashRef = React.useRef<HTMLDivElement | null>(null);
   
   const [isAutoCameraMove, setIsAutoCameraMove] = useState(true);
   const [showTooltips, setShowTooltips] = useState(() => localStorage.getItem('bi-architect-show-tooltips') !== 'false');
   const [previewNodeId, setPreviewNodeId] = useState<string | null>(null);
 
   const [theme, setTheme] = useState<'light' | 'dark'>('dark');
+  const lastFocusedNodeIdRef = React.useRef<string | null>(null);
+  const prevFocusedNodeIdRef = React.useRef<string | null>(null);
   
   useEffect(() => {
     const savedTheme = localStorage.getItem('bi-architect-theme') as 'light' | 'dark';
@@ -1405,6 +1412,11 @@ const FlowBuilder = () => {
 
   const focusNode = useCallback((nodeId: string, force: boolean = false, instant: boolean = false) => {
     if (!isAutoCameraMove && !force) return;
+
+    if (nodeId && nodeId !== lastFocusedNodeIdRef.current) {
+      prevFocusedNodeIdRef.current = lastFocusedNodeIdRef.current;
+      lastFocusedNodeIdRef.current = nodeId;
+    }
     
     setTimeout(() => {
       const n = getNode(nodeId) as CustomNode | undefined;
@@ -1479,10 +1491,38 @@ const FlowBuilder = () => {
   };
   const handleContextDelete = () => {
     if (!contextMenu) return;
-    _setNodes(nds => nds.filter(n => n.id !== contextMenu.id));
-    _setEdges(eds => eds.filter(e => e.source !== contextMenu.id && e.target !== contextMenu.id));
-    setContextMenu(null);
+    deleteNodeById(contextMenu.id);
   };
+
+  const deleteNodeById = useCallback((nodeId: string) => {
+    const prevFocused = prevFocusedNodeIdRef.current;
+    const lastFocused = lastFocusedNodeIdRef.current;
+    const incomingEdge = edges.find((e) => e.target === nodeId);
+    const incomingSource = incomingEdge?.source;
+    const fallbackId =
+      (prevFocused && prevFocused !== nodeId && nodes.some((n) => n.id === prevFocused) ? prevFocused : null) ||
+      (incomingSource && incomingSource !== nodeId && nodes.some((n) => n.id === incomingSource) ? incomingSource : null) ||
+      (lastFocused && lastFocused !== nodeId && nodes.some((n) => n.id === lastFocused) ? lastFocused : null) ||
+      (nodes.find((n) => n.id !== nodeId)?.id ?? null);
+
+    _setNodes((nds) => nds.filter((n) => n.id !== nodeId));
+    _setEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId));
+    setContextMenu((prev) => (prev?.id === nodeId ? null : prev));
+
+    if (fallbackId) {
+      if (lastFocusedNodeIdRef.current === nodeId) lastFocusedNodeIdRef.current = fallbackId;
+      setTimeout(() => {
+        focusNode(fallbackId);
+      }, 0);
+    }
+  }, [_setNodes, _setEdges, edges, nodes, focusNode]);
+
+  const isPointInTrash = useCallback((clientX: number, clientY: number) => {
+    const el = trashRef.current;
+    if (!el) return false;
+    const rect = el.getBoundingClientRect();
+    return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+  }, []);
 
   const handleAutoLayout = useCallback(() => {
     const levels: Record<string, number> = {};
@@ -1504,6 +1544,21 @@ const FlowBuilder = () => {
     });
     _setNodes(newNodes);
   }, [nodes, edges, _setNodes]);
+
+  const handleAutoLayoutConfirm = useCallback(() => {
+    setIsAutoLayoutConfirmOpen(true);
+  }, []);
+
+  const handleConnect = useCallback(
+    (p: any) => {
+      _setEdges((eds: any) =>
+        addEdge({ ...p, animated: true, style: { stroke: '#38bdf8', strokeWidth: 4 } } as any, eds),
+      );
+      if (p?.target) focusNode(p.target);
+    },
+    [_setEdges, focusNode],
+  );
+
 
   const handleReset = () => {
     _setNodes([{ id: 'n-1', type: 'dataNode', position: { x: 50, y: 150 }, data: { useFirstRowAsHeader: true } }]);
@@ -1661,8 +1716,8 @@ const FlowBuilder = () => {
           </a>
           
           <div className="flex items-center gap-3 shrink-0">
-            <button onClick={handleAutoLayout} className={`text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-1.5 shadow-sm active:scale-95 transition-colors border ${isDark ? 'bg-[#252526] hover:bg-[#333] border-[#444] text-[#666]' : 'bg-white hover:bg-gray-50 border-gray-200 text-gray-600'}`} title="Auto Layout">
-              <span className="flex items-center justify-center text-lg">{Icons.Layout}</span> 整列
+            <button onClick={handleAutoLayoutConfirm} className={`text-[10px] p-2 rounded-lg font-bold uppercase tracking-widest flex items-center justify-center shadow-sm active:scale-95 transition-colors border ${isDark ? 'bg-[#252526] hover:bg-[#333] border-[#444] text-[#666]' : 'bg-white hover:bg-gray-50 border-gray-200 text-gray-600'}`} title="整列">
+              <span className="flex items-center justify-center text-lg">{Icons.Layout}</span>
             </button>
 
             <button onClick={() => setShowTutorial(true)} className={`text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-2 shadow-sm active:scale-95 transition-colors border ${isDark ? 'bg-[#252526] hover:bg-[#333] border-[#444] text-[#666]' : 'bg-white hover:bg-gray-50 border-gray-200 text-gray-600'}`} title="Tutorial">
@@ -1701,13 +1756,32 @@ const FlowBuilder = () => {
               onInit={onInit}
               onNodesChange={onNodesChange} 
               onEdgesChange={onEdgesChange} 
-              onConnect={(p) => _setEdges((eds: any) => addEdge({ ...p, animated: true, style: { stroke: '#38bdf8', strokeWidth: 4 } } as any, eds))} 
+              onConnect={handleConnect} 
               onEdgeContextMenu={onEdgeContextMenu} 
               onNodeContextMenu={onNodeContextMenu}
               onPaneClick={() => setContextMenu(null)}
               nodeTypes={nodeTypesObj} 
               connectionRadius={50}
-              onNodeDragStop={(_, node: any) => { focusNode(node.id); }}
+              onNodeDragStart={(_, node: any) => {
+                setIsNodeDragging(true);
+                setDraggingNodeId(node.id);
+                setIsTrashHover(false);
+              }}
+              onNodeDrag={(event, node: any) => {
+                if (draggingNodeId !== node.id) return;
+                if (!(event instanceof MouseEvent)) return;
+                setIsTrashHover(isPointInTrash(event.clientX, event.clientY));
+              }}
+              onNodeDragStop={(event, node: any) => {
+                if (event instanceof MouseEvent && isPointInTrash(event.clientX, event.clientY)) {
+                  deleteNodeById(node.id);
+                } else {
+                  focusNode(node.id);
+                }
+                setIsNodeDragging(false);
+                setDraggingNodeId(null);
+                setIsTrashHover(false);
+              }}
               onDrop={(e) => { 
                 const t = e.dataTransfer.getData('application/reactflow'); 
                 if (t) {
@@ -1729,6 +1803,19 @@ const FlowBuilder = () => {
               <Controls className={`border fill-gray-600 ${isDark ? 'bg-[#252526] border-[#444]' : 'bg-white border-gray-200'}`} />
               <NodeNavigator tList={tList} nodes={nodes} />
             </ReactFlow>
+
+            {isNodeDragging && (
+              <div
+                ref={trashRef}
+                className={`pointer-events-none absolute bottom-6 left-1/2 -translate-x-1/2 z-[60] w-16 h-16 rounded-2xl border flex items-center justify-center transition-colors shadow-2xl ${
+                  isTrashHover
+                    ? (isDark ? 'bg-rose-600/30 border-rose-500 text-rose-300' : 'bg-rose-100 border-rose-300 text-rose-600')
+                    : (isDark ? 'bg-[#252526]/90 border-[#444] text-[#aaa]' : 'bg-white/90 border-gray-200 text-gray-600')
+                }`}
+              >
+                <span className="flex items-center justify-center text-2xl">{Icons.Trash}</span>
+              </div>
+            )}
 
             {contextMenu && (
               <div 
@@ -1999,6 +2086,21 @@ const FlowBuilder = () => {
           onExportFile={handleExportFile}
           onImportFile={handleImportFile}
         />
+
+        {isAutoLayoutConfirmOpen && (
+          <div className={`fixed inset-0 z-[300] flex items-center justify-center p-8 backdrop-blur-sm no-print ${isDark ? 'bg-black/80' : 'bg-gray-900/50'}`}>
+            <div className={`border rounded-2xl shadow-2xl w-[360px] p-6 text-center space-y-6 ${isDark ? 'bg-[#1e1e1e] border-[#444]' : 'bg-white border-gray-200'}`}>
+              <div className="space-y-2">
+                <h3 className={`text-sm font-bold tracking-widest ${isDark ? 'text-white' : 'text-gray-900'}`}>Visual Data Prep</h3>
+                <p className={`text-[10px] ${isDark ? 'text-[#888]' : 'text-gray-500'}`}>ノードを整列しますか？</p>
+              </div>
+              <div className="flex gap-3">
+                <button onClick={() => setIsAutoLayoutConfirmOpen(false)} className={`flex-1 py-3 rounded-xl text-[10px] font-bold uppercase tracking-widest transition-colors ${isDark ? 'bg-[#333] hover:bg-[#444] text-white' : 'bg-gray-200 hover:bg-gray-300 text-gray-800'}`}>いいえ</button>
+                <button onClick={() => { setIsAutoLayoutConfirmOpen(false); handleAutoLayout(); }} className="flex-1 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-[10px] font-bold uppercase tracking-widest shadow-xl transition-all">はい</button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {isResetModalOpen && (
           <div className={`fixed inset-0 z-[300] flex items-center justify-center p-8 backdrop-blur-sm no-print ${isDark ? 'bg-black/80' : 'bg-gray-900/50'}`}>
