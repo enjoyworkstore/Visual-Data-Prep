@@ -1,5 +1,5 @@
 appId: com.electron.app
-productName: biarchitect
+productName: VisualDataPrep
 directories:
   buildResources: build
 files:
@@ -12,9 +12,9 @@ files:
 asarUnpack:
   - resources/**
 win:
-  executableName: biarchitect
+  executableName: VisualDataPrep
 nsis:
-  artifactName: ${name}-${version}-setup.${ext}
+  artifactName: VisualDataPrep-${version}-setup.${ext}
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always

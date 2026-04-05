@@ -33,6 +33,95 @@ const parseDelimitedTextToMatrix = (text: string): string[][] => {
 const matrixToDelimitedText = (matrix: string[][]): string =>
   sanitizeMatrix(matrix).map((row) => row.join('\t')).join('\n');
 
+const stringifyJsonCell = (value: unknown): string | number | boolean | null => {
+  if (value == null) return null;
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
+  return JSON.stringify(value);
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  !!value && typeof value === 'object' && !Array.isArray(value);
+
+const isArrayOfArrays = (value: unknown[]): value is unknown[][] => value.every((item) => Array.isArray(item));
+
+const isObjectArray = (value: unknown[]): value is Record<string, unknown>[] =>
+  value.every((item) => isRecord(item));
+
+const jsonToWorkbook = (text: string): XLSX.WorkBook => {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    throw new Error('JSONファイルが空です。内容を確認してください。');
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed) as unknown;
+  } catch (err) {
+    const detail = err instanceof Error && err.message ? ` (${err.message})` : '';
+    throw new Error(`JSONファイルの解析に失敗しました。JSON形式として正しい内容か確認してください。${detail}`);
+  }
+  const wb = XLSX.utils.book_new();
+  let ws: XLSX.WorkSheet;
+
+  if (Array.isArray(parsed)) {
+    const parsedArray: unknown[] = parsed;
+    if (parsed.length === 0) {
+      ws = XLSX.utils.json_to_sheet([]);
+    } else if (isArrayOfArrays(parsedArray)) {
+      ws = XLSX.utils.aoa_to_sheet(parsedArray.map((row) => row.map((cell) => stringifyJsonCell(cell))));
+    } else if (isObjectArray(parsedArray)) {
+      ws = XLSX.utils.json_to_sheet(
+        parsedArray.map((row) =>
+          Object.fromEntries(Object.entries(row).map(([key, value]) => [key, stringifyJsonCell(value)]))
+        )
+      );
+    } else {
+      ws = XLSX.utils.json_to_sheet(parsedArray.map((value) => ({ value: stringifyJsonCell(value) })));
+    }
+  } else if (isRecord(parsed)) {
+    ws = XLSX.utils.json_to_sheet([
+      Object.fromEntries(Object.entries(parsed).map(([key, value]) => [key, stringifyJsonCell(value)]))
+    ]);
+  } else {
+    ws = XLSX.utils.json_to_sheet([{ value: stringifyJsonCell(parsed) }]);
+  }
+
+  XLSX.utils.book_append_sheet(wb, ws, 'JSON');
+  return wb;
+};
+
+const readWorkbookFromFile = (
+  file: File | Blob,
+  fileName: string,
+  onSuccess: (workbook: XLSX.WorkBook) => void,
+  onError: (error: Error) => void
+) => {
+  const lowerName = fileName.toLowerCase();
+  const reader = new FileReader();
+
+  reader.onload = (evt: ProgressEvent<FileReader>) => {
+    try {
+      const result = evt.target?.result;
+      const workbook = lowerName.endsWith('.json')
+        ? jsonToWorkbook(String(result || ''))
+        : XLSX.read(result, { type: 'binary' });
+      onSuccess(workbook);
+    } catch (error) {
+      onError(error instanceof Error ? error : new Error('Unknown file read error'));
+    }
+  };
+
+  reader.onerror = () => {
+    onError(new Error('ファイルの読み込み中にエラーが発生しました。'));
+  };
+
+  if (lowerName.endsWith('.json')) {
+    reader.readAsText(file);
+  } else {
+    reader.readAsBinaryString(file);
+  }
+};
+
 const extractDataFromMatrix = (
   matrix: any[][],
   ranges: string[] = [],
@@ -256,7 +345,7 @@ const LandingPage = () => {
           
           <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
             {[
-              { i: Icons.Layout, t: "直感的なノーコードUI", d: "ノードをキャンバスに配置して線で繋ぐだけ。プログラミングの知識はなくてもできる。" },
+              { i: Icons.Layout, t: "直感的なノーコードUI", d: "ノードをキャンバスに配置して線で繋ぐだけ。" },
               { i: Icons.Database, t: "多彩なデータソース", d: "ローカルのCSV/Excelだけでなく、フォルダ自動監視やコピペ入力にも対応。" },
               { i: Icons.Zap, t: "強力なクレンジング", d: "VLOOKUP的な結合、文字列抽出、ゼロ埋め、四則演算まで豊富な変換ノードを搭載。" },
               { i: Icons.Code, t: "SQLの相互変換", d: "作成したフローからSELECT文を自動生成。逆にSQLからノードを自動配置することも可能。" }
@@ -278,7 +367,7 @@ const LandingPage = () => {
         <div className="max-w-5xl mx-auto px-6">
           <div className="text-center mb-12">
             <h2 className="text-xs font-bold tracking-[0.3em] text-gray-500 mb-2 uppercase">Use Cases</h2>
-            <h3 className="text-2xl font-bold text-gray-900">使用ケース</h3>
+            <h3 className="text-2xl font-bold text-gray-900">使用ケース例</h3>
           </div>
           
           <div className="grid md:grid-cols-3 gap-6">
@@ -338,7 +427,10 @@ const LandingPage = () => {
 
       <footer className="border-t border-gray-200 bg-white py-6 text-center">
         <p className="text-[10px] font-bold tracking-widest text-gray-500 uppercase">
-          &copy; {new Date().getFullYear()} Visual Data Prep. All rights reserved.
+          &copy; {new Date().getFullYear()} enjoyworkstore. All rights reserved.
+        </p>
+        <p className="mt-2 text-[11px] text-gray-500">
+          Contact: support@enjoyworkstore.com
         </p>
       </footer>
     </div>
@@ -601,14 +693,24 @@ const DataNode = memo(({ id, data }: any) => {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   const processFile = (f: File | Blob, fileName: string, pathStr: string) => {
-    const r = new FileReader();
-    r.onload = (evt: any) => {
-      const wb = XLSX.read(evt.target.result, { type: 'binary' });
+    readWorkbookFromFile(
+      f,
+      fileName,
+      (wb) => {
       setWorkbooks((p: any) => ({ ...p, [id]: wb }));
       updateNodeData(id, { fileName, filePath: pathStr, sheetNames: wb.SheetNames, currentSheet: wb.SheetNames[0], needsUpload: false });
       focusNode(id);
-    };
-    r.readAsBinaryString(f as Blob);
+      },
+      (error) => {
+        console.error('Failed to parse source file:', error);
+        const isJson = fileName.toLowerCase().endsWith('.json');
+        alert(
+          isJson
+            ? error.message || 'JSONファイルの解析に失敗しました。JSON形式として正しい内容か確認してください。'
+            : 'ファイルの解析に失敗しました。対応していない形式か、ファイルが破損しています。'
+        );
+      }
+    );
   };
 
   const onUp = (e: any) => {
@@ -625,21 +727,36 @@ const DataNode = memo(({ id, data }: any) => {
       fileInputRef.current?.click();
       return;
     }
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 10000);
     try {
-      const res = await fetch(targetPath);
-      if (!res.ok) throw new Error('Fetch failed');
+      const res = await fetch(targetPath, { signal: controller.signal });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${res.statusText || 'Fetch failed'}`);
+      }
       const blob = await res.blob();
       processFile(blob, data.fileName, targetPath);
     } catch (err) {
-      console.log("Auto reload failed, opening file picker...");
+      console.error('Auto reload failed:', err);
+      let feedback = 'ファイルの自動再読み込みに失敗しました。手動でファイルを再選択してください。';
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        feedback = 'ファイルの自動再読み込みがタイムアウトしました。ネットワークやファイルパスを確認し、手動でファイルを再選択してください。';
+      } else if (err instanceof TypeError) {
+        feedback = 'ファイルの自動再読み込み中にネットワークエラーが発生しました。接続先またはファイルパスを確認し、手動でファイルを再選択してください。';
+      } else if (err instanceof Error) {
+        feedback = `ファイルの自動再読み込みに失敗しました (${err.message})。手動でファイルを再選択してください。`;
+      }
+      alert(feedback);
       fileInputRef.current?.click();
+    } finally {
+      window.clearTimeout(timeoutId);
     }
   };
 
   const summary = data.fileName ? data.fileName : '';
   return (
-    <NodeWrap id={id} data={data} title="Source" col={isDark ? "text-blue-400" : "text-blue-600"} showTgt={false} summary={summary} helpText="ローカルのCSVやExcelファイルを選択して読み込みます。パネルから抽出範囲やヘッダーの設定が可能です。">
-      <input type="file" accept=".csv,.xlsx" className="hidden" ref={fileInputRef} onChange={onUp} />
+    <NodeWrap id={id} data={data} title="Source" col={isDark ? "text-blue-400" : "text-blue-600"} showTgt={false} summary={summary} helpText="ローカルのCSV・Excel・JSONファイルを選択して読み込みます。パネルから抽出範囲やヘッダーの設定が可能です。">
+      <input type="file" accept=".csv,.xlsx,.json,application/json" className="hidden" ref={fileInputRef} onChange={onUp} />
       {data.needsUpload ? (
         <div className="space-y-3">
           <div className={`text-[10px] ${isDark ? 'text-white bg-blue-500/20 border-blue-500/50' : 'text-gray-800 bg-blue-50 border-blue-200'} flex items-center gap-2 p-2 rounded border`}>
@@ -693,7 +810,7 @@ const FolderSourceNode = memo(({ id, data }: any) => {
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         const lowerName = file.name.toLowerCase();
-        if (lowerName.endsWith('.csv') || lowerName.endsWith('.xlsx')) {
+        if (lowerName.endsWith('.csv') || lowerName.endsWith('.xlsx') || lowerName.endsWith('.json')) {
           if (file.lastModified > latestTime) {
             latestTime = file.lastModified;
             latestFile = file;
@@ -702,10 +819,10 @@ const FolderSourceNode = memo(({ id, data }: any) => {
       }
 
       if (latestFile) {
-        const r = new FileReader();
-        r.onload = (evt: any) => {
-          try {
-            const wb = XLSX.read(evt.target.result, { type: 'binary' });
+        readWorkbookFromFile(
+          latestFile,
+          latestFile.name,
+          (wb) => {
             setWorkbooks((p: any) => ({ ...p, [id]: wb }));
             
             const folderPath = latestFile!.webkitRelativePath;
@@ -719,19 +836,21 @@ const FolderSourceNode = memo(({ id, data }: any) => {
                 needsUpload: false 
             });
             focusNode(id);
-          } catch(err) {
-            alert('ファイルの解析に失敗しました。対応していない形式か、ファイルが破損しています。');
-          } finally {
+            setIsLoading(false);
+          },
+          (error) => {
+            console.error('Failed to parse folder source file:', error);
+            const isJson = latestFile!.name.toLowerCase().endsWith('.json');
+            alert(
+              isJson
+                ? error.message || 'JSONファイルの解析に失敗しました。JSON形式として正しい内容か確認してください。'
+                : 'ファイルの解析に失敗しました。対応していない形式か、ファイルが破損しています。'
+            );
             setIsLoading(false);
           }
-        };
-        r.onerror = () => {
-          alert('ファイルの読み込み中にエラーが発生しました。');
-          setIsLoading(false);
-        };
-        r.readAsBinaryString(latestFile);
+        );
       } else {
-        alert("選択されたフォルダ内に、CSVまたはExcelファイル（.csv, .xlsx）が見つかりませんでした。");
+        alert("選択されたフォルダ内に、CSV・Excel・JSONファイル（.csv, .xlsx, .json）が見つかりませんでした。");
         setIsLoading(false);
       }
     } catch (err) {
@@ -752,7 +871,7 @@ const FolderSourceNode = memo(({ id, data }: any) => {
 
   const summary = data.folderName ? `[${data.folderName}] ${data.fileName}` : '';
   return (
-    <NodeWrap id={id} data={data} title="Auto Folder" col={isDark ? "text-indigo-400" : "text-indigo-600"} showTgt={false} summary={summary} helpText="指定したフォルダを監視し、その中の『最も新しく更新されたファイル』を自動で読み込みます。毎月の売上データ追加など、定期的な更新作業に便利です。">
+    <NodeWrap id={id} data={data} title="Auto Folder" col={isDark ? "text-indigo-400" : "text-indigo-600"} showTgt={false} summary={summary} helpText="指定したフォルダを監視し、その中の『最も新しく更新されたCSV・Excel・JSONファイル』を自動で読み込みます。毎月の売上データ追加など、定期的な更新作業に便利です。">
       {data.needsUpload ? (
         <div className="space-y-3">
           <div className={`text-[10px] ${isDark ? 'text-white bg-indigo-500/20 border-indigo-500/50' : 'text-gray-800 bg-indigo-50 border-indigo-200'} flex items-center gap-2 p-2 rounded border`}>
@@ -1247,6 +1366,7 @@ const FlowBuilder = () => {
   const [isDragging, setIsDragging] = useState(false);
   
   const [isAutoCameraMove, setIsAutoCameraMove] = useState(true);
+  const [showTooltips, setShowTooltips] = useState(() => localStorage.getItem('bi-architect-show-tooltips') !== 'false');
   const [previewNodeId, setPreviewNodeId] = useState<string | null>(null);
 
   const [theme, setTheme] = useState<'light' | 'dark'>('dark');
@@ -1265,6 +1385,10 @@ const FlowBuilder = () => {
       document.documentElement.classList.remove('dark');
     }
   }, [theme]);
+
+  useEffect(() => {
+    localStorage.setItem('bi-architect-show-tooltips', String(showTooltips));
+  }, [showTooltips]);
 
   const toggleTheme = useCallback(() => {
     setTheme(t => {
@@ -1505,8 +1629,8 @@ const FlowBuilder = () => {
   };
 
   const tList = [
-    { t: 'dataNode', l: 'Source', i: Icons.Source, c: 'text-blue-500 dark:text-blue-400', desc: 'CSVやExcelファイルを選択して読み込みます。' },
-    { t: 'folderSourceNode', l: 'Auto Folder', i: Icons.FolderAuto, c: 'text-indigo-500 dark:text-indigo-400', desc: '指定フォルダを監視し、中の最新ファイルを自動で読み込みます。' },
+    { t: 'dataNode', l: 'Source', i: Icons.Source, c: 'text-blue-500 dark:text-blue-400', desc: 'CSV・Excel・JSONファイルを選択して読み込みます。' },
+    { t: 'folderSourceNode', l: 'Auto Folder', i: Icons.FolderAuto, c: 'text-indigo-500 dark:text-indigo-400', desc: '指定フォルダを監視し、中の最新CSV・Excel・JSONファイルを自動で読み込みます。' },
     { t: 'pasteNode', l: 'Paste Data', i: Icons.Paste, c: 'text-orange-500 dark:text-orange-400', desc: 'Excel等のデータを表形式で直接貼り付け・編集し、範囲選択して読み込みます。' },
     { t: 'unionNode', l: 'Union', i: Icons.Union, c: 'text-blue-500 dark:text-blue-400', desc: '2つのデータを「縦」に繋ぎ合わせます。(データの追加)' },
     { t: 'joinNode', l: 'Join', i: Icons.Join, c: 'text-blue-500 dark:text-blue-400', desc: '2つのデータを共通のキーで「横」に繋ぎます。' },
@@ -1524,9 +1648,10 @@ const FlowBuilder = () => {
 
   const isDark = theme === 'dark';
   const btnClasses = isSidebarOpen ? 'p-3 gap-4 w-[calc(100%-0.5rem)] mr-2' : 'p-2 justify-center w-9 h-10 mr-1';
+  const NEW_NODE_DROP_OFFSET = { x: 130, y: 32 };
 
   return (
-    <AppContext.Provider value={{ workbooks, setWorkbooks, setRangeModalNode, setPasteEditorNode, nodeFlowData, isAutoCameraMove, focusNode, theme, activePreviewId: activePreviewId as string | null }}>
+    <AppContext.Provider value={{ workbooks, setWorkbooks, setRangeModalNode, setPasteEditorNode, nodeFlowData, isAutoCameraMove, showTooltips, focusNode, theme, activePreviewId: activePreviewId as string | null }}>
       <div className={`h-screen w-screen flex flex-col font-sans overflow-hidden transition-colors ${isDark ? 'bg-[#1a1a1a]' : 'bg-gray-50'}`} onClick={() => setContextMenu(null)}>
         <GlobalStyle />
         <div className={`border-b px-6 py-3 flex justify-between items-center z-40 gap-4 no-print transition-colors ${isDark ? 'bg-[#181818] border-[#333] shadow-md' : 'bg-white border-gray-200 shadow-sm'}`}>
@@ -1542,6 +1667,10 @@ const FlowBuilder = () => {
 
             <button onClick={() => setShowTutorial(true)} className={`text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-2 shadow-sm active:scale-95 transition-colors border ${isDark ? 'bg-[#252526] hover:bg-[#333] border-[#444] text-[#666]' : 'bg-white hover:bg-gray-50 border-gray-200 text-gray-600'}`} title="Tutorial">
               <span className="flex items-center justify-center text-lg">{Icons.Help}</span>
+            </button>
+
+            <button onClick={() => setShowTooltips(!showTooltips)} className={`text-[10px] px-3 py-2 rounded-lg font-bold tracking-widest flex items-center gap-1.5 shadow-sm active:scale-95 transition-colors border ${isDark ? 'bg-[#252526] hover:bg-[#333] border-[#444]' : 'bg-white hover:bg-gray-50 border-gray-200'} ${showTooltips ? (isDark ? 'text-blue-400' : 'text-blue-500') : (isDark ? 'text-[#666]' : 'text-gray-500')}`} title="Toggle Tooltips">
+              <span className="flex items-center justify-center text-lg">{Icons.Help}</span> Tooltips: {showTooltips ? 'ON' : 'OFF'}
             </button>
 
             <button onClick={toggleTheme} className={`text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-2 shadow-sm active:scale-95 transition-colors border ${isDark ? 'bg-[#252526] hover:bg-[#333] border-[#444] text-[#666]' : 'bg-white hover:bg-gray-50 border-gray-200 text-gray-600'}`} title="Toggle Theme">
@@ -1582,7 +1711,12 @@ const FlowBuilder = () => {
               onDrop={(e) => { 
                 const t = e.dataTransfer.getData('application/reactflow'); 
                 if (t) {
-                  const position = screenToFlowPosition({ x: e.clientX, y: e.clientY });
+                  // New nodes feel more natural when they appear around the cursor,
+                  // instead of placing their top-left corner exactly at the drop point.
+                  const position = screenToFlowPosition({
+                    x: e.clientX - NEW_NODE_DROP_OFFSET.x,
+                    y: e.clientY - NEW_NODE_DROP_OFFSET.y
+                  });
                   const id = `n-${Date.now()}`;
                   _setNodes((nds: any) => nds.concat({ id, type: t, position, data: { useFirstRowAsHeader: true } })); 
                   focusNode(id);
@@ -1624,10 +1758,12 @@ const FlowBuilder = () => {
                 <div key={item.t} className={`relative group/btn rounded-xl cursor-grab flex items-center transition-all shadow-sm active:scale-95 border ${isDark ? 'bg-[#252526] border-[#333]' : 'bg-white border-gray-200'} ${hoverBorderClass} ${btnClasses}`} onDragStart={(e) => e.dataTransfer.setData('application/reactflow', item.t)} draggable>
                   <div className={`${item.c} text-lg group-hover/btn:scale-125 transition-transform flex items-center justify-center ${isSidebarOpen ? '' : 'text-xl'}`}>{item.i}</div>
                   {isSidebarOpen && <span className={`text-[10px] font-bold uppercase tracking-wider truncate ${isDark ? 'text-[#888] group-hover/btn:text-white' : 'text-gray-600 group-hover/btn:text-gray-900'}`}>{item.l}</span>}
-                  <div className={`absolute left-0 top-full mt-2 w-56 text-[11px] p-3 rounded-lg border opacity-0 group-hover/btn:opacity-100 pointer-events-none transition-opacity z-[999] shadow-2xl hidden md:block normal-case leading-relaxed ${isDark ? 'bg-[#111] text-[#ccc] border-[#555]' : 'bg-white text-gray-700 border-gray-300'}`}>
-                    <div className={`font-bold mb-1 tracking-widest ${isDark ? 'text-white' : 'text-gray-900'}`}>{item.l}</div>
-                    {item.desc}
-                  </div>
+                  {showTooltips && (
+                    <div className={`absolute right-0 top-full mt-2 w-56 text-[11px] p-3 rounded-lg border opacity-0 group-hover/btn:opacity-100 pointer-events-none transition-opacity z-[999] shadow-2xl hidden md:block normal-case leading-relaxed ${isDark ? 'bg-[#111] text-[#ccc] border-[#555]' : 'bg-white text-gray-700 border-gray-300'}`}>
+                      <div className={`font-bold mb-1 tracking-widest ${isDark ? 'text-white' : 'text-gray-900'}`}>{item.l}</div>
+                      {item.desc}
+                    </div>
+                  )}
                 </div>
               )})}
             </div>
@@ -1823,7 +1959,7 @@ const FlowBuilder = () => {
                     </div>
                     <div className="flex-1">
                       <div className={`text-[10px] font-bold uppercase tracking-widest mb-1 ${isDark ? 'text-white' : 'text-gray-800'}`}>Step 2: Connect Flow</div>
-                      <p className={`text-[10px] leading-relaxed ${isDark ? 'text-[#888]' : 'text-gray-500'}`}>ノード同士の<strong>青い○（ハンドル）</strong>をマウスで繋ぐと、データが左から右へと流れて処理されます。</p>
+                      <p className={`text-[10px] leading-relaxed ${isDark ? 'text-[#888]' : 'text-gray-500'}`}>ノード同士の<strong>青い○（ハンドル）</strong>をマウスで繋ぐと、データが左から右へと流れて処理されます。繋いだ線に対して右クリックで解除できます</p>
                     </div>
                   </div>
 
@@ -2411,8 +2547,8 @@ const SaveLoadModal = ({ isOpen, onClose, onSave, onLoad, onDelete, flows, onExp
           {tab === 'load' ? (
             <div className="flex-1 flex flex-col">
               <div className="flex gap-2 mb-4 shrink-0">
-                 <button onClick={onExportFile} className={`flex-1 py-2 text-[10px] font-bold rounded-lg border transition-colors ${isDark ? 'bg-[#333] border-[#444] text-[#ccc] hover:bg-[#444] hover:text-white' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'}`}>📤 JSONを出力</button>
-                 <button onClick={() => fileInputRef.current?.click()} className={`flex-1 py-2 text-[10px] font-bold rounded-lg border transition-colors ${isDark ? 'bg-[#333] border-[#444] text-[#ccc] hover:bg-[#444] hover:text-white' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'}`}>📥 JSONを読込</button>
+                 <button onClick={onExportFile} className={`flex-1 py-2 text-[10px] font-bold rounded-lg border transition-colors ${isDark ? 'bg-[#333] border-[#444] text-[#ccc] hover:bg-[#444] hover:text-white' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'}`}>JSONを出力</button>
+                 <button onClick={() => fileInputRef.current?.click()} className={`flex-1 py-2 text-[10px] font-bold rounded-lg border transition-colors ${isDark ? 'bg-[#333] border-[#444] text-[#ccc] hover:bg-[#444] hover:text-white' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'}`}>JSONを読込</button>
                  <input type="file" accept=".json" className="hidden" ref={fileInputRef} onChange={handleFileChange} />
               </div>
               <div className="space-y-3 overflow-y-auto flex-1 custom-scrollbar pr-2">

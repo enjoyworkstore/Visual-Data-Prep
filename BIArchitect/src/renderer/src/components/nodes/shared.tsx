@@ -9,6 +9,7 @@ export type AppContextType = {
   setPasteEditorNode: React.Dispatch<React.SetStateAction<{ nodeId: string; selectionMode: boolean } | null>>;
   nodeFlowData: Record<string, any>;
   isAutoCameraMove: boolean;
+  showTooltips: boolean;
   focusNode: (id: string, force?: boolean, instant?: boolean) => void;
   theme: 'light' | 'dark';
   activePreviewId: string | null;
@@ -17,7 +18,7 @@ export type AppContextType = {
 export const AppContext = createContext<AppContextType>({} as AppContextType);
 
 export const useNodeLogic = (id: string) => {
-  const { nodeFlowData, isAutoCameraMove, focusNode, theme, activePreviewId } = useContext(AppContext);
+  const { nodeFlowData, isAutoCameraMove, focusNode, theme, activePreviewId, showTooltips } = useContext(AppContext);
   const { updateNodeData, setNodes, setEdges, getEdges } = useReactFlow();
   const isDark = theme === 'dark';
 
@@ -25,6 +26,7 @@ export const useNodeLogic = (id: string) => {
     fData: nodeFlowData[id] || { incomingHeaders: [], headersA: [], headersB: [] },
     isDark,
     activePreviewId,
+    showTooltips,
     onChg: (k: string, v: any) => {
       updateNodeData(id, { [k]: v });
       if (['command', 'joinType', 'chartType', 'matchType', 'aggType', 'groupCol', 'sortCol', 'targetCol', 'filterCol', 'xAxis', 'yAxis', 'applyCond', 'fetchCol', 'colA', 'colB', 'operator', 'newColName', 'createNewCol', 'checkCol', 'checkType'].includes(k)) {
@@ -114,7 +116,7 @@ export const NodeWrap = memo(({
   helpText = '',
   statusTone = '',
 }: NodeWrapProps) => {
-  const { isDark, activePreviewId } = useNodeLogic(id);
+  const { isDark, activePreviewId, showTooltips } = useNodeLogic(id);
   const [showHelp, setShowHelp] = useState(false);
   const { updateNodeData } = useReactFlow();
 
@@ -145,7 +147,7 @@ export const NodeWrap = memo(({
             {isCollapsed ? ChevronDownIcon : ChevronUpIcon}
           </button>
           <span className={`text-[10px] font-bold tracking-widest uppercase ${col}`}>{title}</span>
-          {helpText && (
+          {helpText && showTooltips && (
             <div className="relative flex items-center">
               <button
                 onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowHelp(!showHelp); }}
