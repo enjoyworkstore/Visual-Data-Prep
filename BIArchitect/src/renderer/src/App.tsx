@@ -1,24 +1,91 @@
-import React, { useState, useCallback, useMemo, memo, createContext, useContext, useEffect } from 'react';
+import React, { useState, useCallback, useMemo, memo, useContext, useEffect } from 'react';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
-import { ReactFlow, Controls, Background, addEdge, Handle, Position, ReactFlowProvider, useReactFlow, useNodesState, useEdgesState, Panel } from '@xyflow/react';
+import { ReactFlow, Controls, Background, addEdge, ReactFlowProvider, useReactFlow, useNodesState, useEdgesState, Panel } from '@xyflow/react';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import type { Node, Edge } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+import landingScreenshot from '../Public/screenshot.png';
+import DataCheckNode from './components/nodes/DataCheckNode';
+import NodeInput from './components/nodes/NodeInput';
+import { AppContext, NodeWrap, useNodeLogic } from './components/nodes/shared';
+import { getCheckOperatorLabel, matchesCondition } from './components/nodes/dataCheckUtils';
 
 type CustomNode = Node<Record<string, any>>;
 
-type AppContextType = {
-  workbooks: Record<string, XLSX.WorkBook>;
-  setWorkbooks: React.Dispatch<React.SetStateAction<Record<string, XLSX.WorkBook>>>;
-  setRangeModalNode: React.Dispatch<React.SetStateAction<string | null>>;
-  nodeFlowData: Record<string, any>;
-  isAutoCameraMove: boolean;
-  focusNode: (id: string, force?: boolean, isDragging?: boolean) => void;
-  theme: 'light' | 'dark';
-  activePreviewId: string | null;
+const createEmptyMatrix = (rows: number = 6, cols: number = 4): string[][] =>
+  Array.from({ length: rows }, () => Array.from({ length: cols }, () => ''));
+
+const sanitizeMatrix = (matrix: any): string[][] => {
+  if (!Array.isArray(matrix) || matrix.length === 0) return createEmptyMatrix();
+  const rows = matrix.map((row: any) => Array.isArray(row) ? row.map((cell: any) => cell == null ? '' : String(cell)) : []);
+  const colCount = Math.max(1, ...rows.map((row: string[]) => row.length));
+  return rows.map((row: string[]) => Array.from({ length: colCount }, (_, idx) => row[idx] ?? ''));
 };
-const AppContext = createContext<AppContextType>({} as AppContextType);
+
+const parseDelimitedTextToMatrix = (text: string): string[][] => {
+  if (!text.trim()) return createEmptyMatrix();
+  const parsed = Papa.parse<string[]>(text.trim(), { skipEmptyLines: false });
+  const rows = (parsed.data || []).map((row: any) => Array.isArray(row) ? row.map((cell: any) => cell == null ? '' : String(cell)) : []);
+  return sanitizeMatrix(rows.filter((row: string[]) => row.length > 0));
+};
+
+const matrixToDelimitedText = (matrix: string[][]): string =>
+  sanitizeMatrix(matrix).map((row) => row.join('\t')).join('\n');
+
+const extractDataFromMatrix = (
+  matrix: any[][],
+  ranges: string[] = [],
+  useHdr: boolean = true
+): { data: any[]; headers: string[] } => {
+  const mat = sanitizeMatrix(matrix);
+  if (mat.length === 0) return { data: [], headers: [] };
+
+  const colCount = Math.max(...mat.map((row) => row.length), 0);
+  if (colCount === 0) return { data: [], headers: [] };
+
+  const defaultRange = XLSX.utils.encode_range({
+    s: { r: 0, c: 0 },
+    e: { r: Math.max(0, mat.length - 1), c: Math.max(0, colCount - 1) }
+  });
+  const targetRanges = ranges.length > 0 ? ranges : [defaultRange];
+
+  let headers: string[] = [];
+  let data: any[] = [];
+
+  targetRanges.forEach((rangeStr, idx) => {
+    const range = XLSX.utils.decode_range(rangeStr);
+    const extractedRows: string[][] = [];
+
+    for (let r = range.s.r; r <= range.e.r; r++) {
+      const row = Array.from({ length: range.e.c - range.s.c + 1 }, (_, cIdx) => mat[r]?.[range.s.c + cIdx] ?? '');
+      extractedRows.push(row);
+    }
+    if (extractedRows.length === 0) return;
+
+    if (idx === 0) {
+      headers = useHdr
+        ? extractedRows[0].map((header, colIdx) => header ? String(header) : `Col_${colIdx + 1}`)
+        : Array.from({ length: extractedRows[0].length }, (_, colIdx) => `Col_${colIdx + 1}`);
+
+      for (let rowIdx = useHdr ? 1 : 0; rowIdx < extractedRows.length; rowIdx++) {
+        const obj: Record<string, string> = {};
+        headers.forEach((header, colIdx) => { obj[header] = extractedRows[rowIdx][colIdx] ?? ''; });
+        data.push(obj);
+      }
+      return;
+    }
+
+    extractedRows.forEach((row) => {
+      const obj: Record<string, string> = {};
+      headers.forEach((header, colIdx) => { obj[header] = row[colIdx] ?? ''; });
+      data.push(obj);
+    });
+  });
+
+  return { data, headers };
+};
+
 
 const GlobalStyle = () => (
   <style>{`
@@ -32,12 +99,25 @@ const GlobalStyle = () => (
     
     .react-flow__node { cursor: grab !important; }
     .react-flow__node:active { cursor: grabbing !important; }
-    .react-flow__handle { width: 18px !important; height: 18px !important; border: 3px solid #fff !important; background-color: #3b82f6 !important; transition: transform 0.1s ease; }
+    
+    .react-flow__handle { 
+      width: 18px !important; 
+      height: 18px !important; 
+      border: 3px solid #fff !important; 
+      background-color: #3b82f6 !important; 
+      transition: transform 0.1s ease; 
+    }
     .dark .react-flow__handle { border: 3px solid #1e1e1e !important; background-color: #38bdf8 !important; }
     .react-flow__handle:hover { transform: scale(1.5); }
+    .react-flow__handle::after {
+      content: '';
+      position: absolute;
+      top: -20px; left: -20px; right: -20px; bottom: -20px;
+      background: transparent;
+    }
+
     .custom-scrollbar::-webkit-scrollbar { width: 4px; }
     
-    /* Tailwindの設定に依存せず、Controlsのダークモードを強制適用 */
     .dark .react-flow__controls-button {
       background-color: #252526 !important;
       border-bottom: 1px solid #444 !important;
@@ -58,7 +138,6 @@ const GlobalStyle = () => (
       background-image: url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%2338bdf8%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E");
     }
     
-    /* ★ PDF印刷用のスタイル */
     @media print {
       body { background: white; }
       .no-print { display: none !important; }
@@ -83,6 +162,9 @@ const Icons = {
   Help: <IconSvg><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></IconSvg>,
   Source: <IconSvg><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></IconSvg>,
   FolderAuto: <IconSvg><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><path d="M12 11v6"/><polyline points="9 14 12 17 15 14"/></IconSvg>,
+  Database: <IconSvg><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></IconSvg>,
+  Zap: <IconSvg><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></IconSvg>,
+  Layout: <IconSvg><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></IconSvg>,
   Web: <IconSvg><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></IconSvg>,
   Union: <IconSvg><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></IconSvg>,
   Join: <IconSvg><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></IconSvg>,
@@ -112,13 +194,10 @@ const Icons = {
   Code: <IconSvg><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></IconSvg>,
   Copy: <IconSvg><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></IconSvg>,
   Focus: <IconSvg><circle cx="12" cy="12" r="3"/><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/></IconSvg>,
-  Download: <IconSvg><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></IconSvg>,
-  Database: <IconSvg><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></IconSvg>,
-  Zap: <IconSvg><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></IconSvg>,
-  Layout: <IconSvg><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></IconSvg>
+  Maximize: <IconSvg><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></IconSvg>,
+  Minimize: <IconSvg><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></IconSvg>
 };
 
-// ★ LandingPage: ツールに合わせて白ベースでコンパクトなデザインに変更
 const LandingPage = () => {
   return (
     <div className="min-h-screen bg-gray-50 text-gray-800 font-sans selection:bg-gray-200">
@@ -130,6 +209,7 @@ const LandingPage = () => {
           </div>
           <div className="flex items-center gap-6">
             <a href="#features" className="text-xs font-bold text-gray-500 hover:text-gray-900 transition-colors hidden md:block tracking-wider uppercase">Features</a>
+            <a href="#use-cases" className="text-xs font-bold text-gray-500 hover:text-gray-900 transition-colors hidden md:block tracking-wider uppercase">Use Cases</a>
             <a href="#how-it-works" className="text-xs font-bold text-gray-500 hover:text-gray-900 transition-colors hidden md:block tracking-wider uppercase">Workflow</a>
             <a href="#/app" className="bg-gray-800 hover:bg-gray-700 text-white text-xs font-bold px-5 py-2.5 rounded-lg tracking-widest transition-all shadow-sm flex items-center gap-2">
               ツールを開く <span className="w-3 h-3 flex items-center justify-center">{Icons.ArrowRight}</span>
@@ -151,15 +231,14 @@ const LandingPage = () => {
           </p>
           <div className="flex justify-center items-center gap-4">
             <a href="#/app" className="bg-gray-800 hover:bg-gray-700 text-white text-sm font-bold px-8 py-3.5 rounded-xl tracking-widest transition-all shadow-md flex items-center gap-2 hover:scale-105">
-               今すぐ使ってみる <span className="w-4 h-4 flex items-center justify-center">{Icons.ArrowRight}</span>
+               使ってみる <span className="w-4 h-4 flex items-center justify-center">{Icons.ArrowRight}</span>
             </a>
           </div>
 
           <div className="mt-16 relative mx-auto max-w-4xl">
             <div className="rounded-xl border border-gray-200 bg-white p-1.5 shadow-xl relative">
-              {/* ★ Vite環境変数を用いた確実な画像パスに変更 */}
               <img 
-                src={`${import.meta.env.BASE_URL}screenshot.png`} 
+                src={landingScreenshot} 
                 alt="Visual Data Prep Screenshot" 
                 className="w-full rounded-lg border border-gray-100 object-cover h-[auto] min-h-[250px] bg-gray-100"
               />
@@ -177,7 +256,7 @@ const LandingPage = () => {
           
           <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
             {[
-              { i: Icons.Layout, t: "直感的なノーコードUI", d: "ノードをキャンバスに配置して線で繋ぐだけ。プログラミングの知識は一切不要です。" },
+              { i: Icons.Layout, t: "直感的なノーコードUI", d: "ノードをキャンバスに配置して線で繋ぐだけ。プログラミングの知識はなくてもできる。" },
               { i: Icons.Database, t: "多彩なデータソース", d: "ローカルのCSV/Excelだけでなく、フォルダ自動監視やコピペ入力にも対応。" },
               { i: Icons.Zap, t: "強力なクレンジング", d: "VLOOKUP的な結合、文字列抽出、ゼロ埋め、四則演算まで豊富な変換ノードを搭載。" },
               { i: Icons.Code, t: "SQLの相互変換", d: "作成したフローからSELECT文を自動生成。逆にSQLからノードを自動配置することも可能。" }
@@ -194,22 +273,47 @@ const LandingPage = () => {
         </div>
       </section>
 
-      <section id="how-it-works" className="py-16 bg-gray-50 border-t border-gray-200">
+      {/* ★ 新しい「使用ケース」セクションを追加 */}
+      <section id="use-cases" className="py-16 bg-gray-50 border-t border-gray-200">
+        <div className="max-w-5xl mx-auto px-6">
+          <div className="text-center mb-12">
+            <h2 className="text-xs font-bold tracking-[0.3em] text-gray-500 mb-2 uppercase">Use Cases</h2>
+            <h3 className="text-2xl font-bold text-gray-900">使用ケース</h3>
+          </div>
+          
+          <div className="grid md:grid-cols-3 gap-6">
+            <div className="bg-white border border-gray-200 p-6 rounded-xl shadow-sm hover:shadow-md transition-shadow">
+              <h4 className="text-sm font-bold text-blue-600 mb-3 border-b border-gray-100 pb-2">1. 複数システムのデータ統合</h4>
+              <p className="text-xs text-gray-600 leading-relaxed">販売管理システムと顧客管理システムなど、別々にエクスポートされたCSVデータを共通キー（顧客IDなど）で手軽にJOINし、分析用の統合データを作成できます。</p>
+            </div>
+            <div className="bg-white border border-gray-200 p-6 rounded-xl shadow-sm hover:shadow-md transition-shadow">
+              <h4 className="text-sm font-bold text-blue-600 mb-3 border-b border-gray-100 pb-2">2. 定期レポート作成の自動化</h4>
+              <p className="text-xs text-gray-600 leading-relaxed">Auto Folderノードで指定フォルダの「最新の売上データ」を自動読み込み。フローを一度作れば、毎月同じ整形・集計処理を手作業で行う手間を省けます。</p>
+            </div>
+            <div className="bg-white border border-gray-200 p-6 rounded-xl shadow-sm hover:shadow-md transition-shadow">
+              <h4 className="text-sm font-bold text-blue-600 mb-3 border-b border-gray-100 pb-2">3. データクレンジングと名寄せ</h4>
+              <p className="text-xs text-gray-600 leading-relaxed">表記ゆれや不要な文字の削除、ゼロ埋め、条件分岐などを視覚的に設定。エンジニアに依頼することなく、現場の担当者だけでデータの正規化を完結させられます。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="how-it-works" className="py-16 bg-white border-t border-gray-200">
         <div className="max-w-5xl mx-auto px-6">
           <div className="text-center mb-12">
             <h2 className="text-xs font-bold tracking-[0.3em] text-gray-500 mb-2 uppercase">Workflow</h2>
-            <h3 className="text-2xl font-bold text-gray-900">使い方：3ステップで完了</h3>
+            <h3 className="text-2xl font-bold text-gray-900">3ステップの使い方</h3>
           </div>
 
           <div className="grid md:grid-cols-3 gap-6">
             {[
               { s: "Step 1", t: "Add Nodes", d: "左側のToolboxから、読み込み(Source)や結合(Join)などのノードをドラッグ＆ドロップで配置します。" },
               { s: "Step 2", t: "Connect Flow", d: "ノード同士の端子をマウスで繋ぎます。データが左から右へと水のように流れて処理されます。" },
-              { s: "Step 3", t: "Preview & Export", d: "画面下部に結果がリアルタイム表示されます。グラフ化や、CSV・Excelへのエクスポートが可能です。" }
+              { s: "Step 3", t: "Preview & Export", d: "画面下部に結果がリアルタイム表示されます。グラフ化や、CSV・Excelへのエクスポート・保存が可能です。" }
             ].map((step, idx) => (
               <div key={idx} className="relative">
                 {idx !== 2 && <div className="hidden md:block absolute top-6 left-1/2 w-full h-[1px] border-t border-dashed border-gray-300 z-0"></div>}
-                <div className="bg-white border border-gray-200 p-6 rounded-xl relative z-10 h-full shadow-sm">
+                <div className="bg-gray-50 border border-gray-200 p-6 rounded-xl relative z-10 h-full shadow-sm">
                   <div className="text-gray-800 font-bold tracking-widest text-[10px] mb-1.5">{step.s}</div>
                   <h4 className="text-base font-bold text-gray-900 mb-2 uppercase">{step.t}</h4>
                   <p className="text-xs text-gray-600 leading-relaxed">{step.d}</p>
@@ -220,10 +324,9 @@ const LandingPage = () => {
         </div>
       </section>
 
-      {/* ★ LP下部の文言を削除し、シンプルにボタンだけにする */}
-      <section className="py-20 bg-white border-t border-gray-200">
+      <section className="py-20 bg-gray-50 border-t border-gray-200">
         <div className="max-w-3xl mx-auto px-6 text-center">
-          <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center text-gray-800 mx-auto mb-6 border border-gray-200">
+          <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center text-gray-800 mx-auto mb-5 border border-gray-200 shadow-sm">
             <span className="w-8 h-8 flex items-center justify-center">{Icons.Diamond}</span>
           </div>
           
@@ -233,7 +336,7 @@ const LandingPage = () => {
         </div>
       </section>
 
-      <footer className="border-t border-gray-200 bg-gray-50 py-6 text-center">
+      <footer className="border-t border-gray-200 bg-white py-6 text-center">
         <p className="text-[10px] font-bold tracking-widest text-gray-500 uppercase">
           &copy; {new Date().getFullYear()} Visual Data Prep. All rights reserved.
         </p>
@@ -242,95 +345,16 @@ const LandingPage = () => {
   );
 }
 
-const CAMERA_OFFSET_X = 250;
-
-const NodeInput = memo(({ value, onChange, placeholder, className }: any) => {
-  const [val, setVal] = useState(value || '');
-  useEffect(() => { setVal(value || ''); }, [value]);
-  return (
-    <input 
-      type="text" 
-      className={`nodrag ${className}`} 
-      placeholder={placeholder} 
-      value={val} 
-      onChange={(e) => setVal(e.target.value)} 
-      onBlur={() => onChange(val)} 
-      onKeyDown={(e) => { if (e.key === 'Enter') { e.currentTarget.blur(); } }}
-    />
-  );
-});
-
 const calcData = (nId: string, nodes: CustomNode[], edges: Edge[], wbs: any): { data: any[], headers: string[] } => {
   const node = nodes.find(n => n.id === nId);
   if (!node) return { data: [], headers: [] };
 
-  if (node.type === 'webSourceNode') {
-    if (!node.data.rawData) return { data: [], headers: [] };
-    try {
-      let cData: any[] = [];
-      let fHdrs: string[] = [];
-      const type = node.data.dataType || 'auto';
-      const raw = node.data.rawData;
-
-      if (type === 'json' || (type === 'auto' && (raw.trim().startsWith('[') || raw.trim().startsWith('{')))) {
-        const parsed = JSON.parse(raw);
-        cData = Array.isArray(parsed) ? parsed : [parsed];
-        if (cData.length > 0) fHdrs = Object.keys(cData[0]);
-      } else if (type === 'html' || (type === 'auto' && raw.toLowerCase().includes('<table'))) {
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(raw, "text/html");
-        
-        const tables = Array.from(doc.querySelectorAll('table'));
-        let targetTable = tables[0];
-        let maxRows = 0;
-        tables.forEach(t => {
-          const rows = t.querySelectorAll('tr').length;
-          if (rows > maxRows) {
-            maxRows = rows;
-            targetTable = t;
-          }
-        });
-
-        if (targetTable) {
-          const rows = Array.from(targetTable.querySelectorAll('tr'));
-          let headerIdx = 0;
-          for (let i = 0; i < rows.length; i++) {
-            if (rows[i].querySelector('th')) { headerIdx = i; break; }
-          }
-
-          let ths = Array.from(rows[headerIdx]?.querySelectorAll('th, td') || []).map(th => th.textContent?.replace(/\s+/g, ' ').trim() || '');
-          const seen = new Set();
-          fHdrs = (ths.length > 0 ? ths : Array.from({length: rows[0]?.querySelectorAll('td').length || 0}, (_, i) => `Col_${i+1}`)).map((h, i) => {
-            let newH = h === '' ? `Col_${i+1}` : h;
-            let counter = 1;
-            while (seen.has(newH)) { newH = `${h}_${counter}`; counter++; }
-            seen.add(newH);
-            return newH;
-          });
-          
-          for (let i = headerIdx + 1; i < rows.length; i++) {
-            const tds = Array.from(rows[i].querySelectorAll('td')).map(td => td.textContent?.replace(/\s+/g, ' ').trim() || '');
-            if (tds.length > 0 && tds.some(t => t !== '')) {
-              const obj: any = {};
-              fHdrs.forEach((h, cIdx) => obj[h] = tds[cIdx] || '');
-              cData.push(obj);
-            }
-          }
-        }
-      } else {
-        const parsed = Papa.parse(raw, { header: true, skipEmptyLines: true });
-        cData = parsed.data;
-        fHdrs = parsed.meta.fields || [];
-      }
-      return { data: cData, headers: fHdrs };
-    } catch (e) { return { data: [], headers: [] }; }
-  }
-
   if (node.type === 'pasteNode') {
-    if (!node.data.rawData) return { data: [], headers: [] };
     try {
-      const parsed = Papa.parse(node.data.rawData.trim(), { header: true, skipEmptyLines: true });
-      return { data: parsed.data, headers: parsed.meta.fields || [] };
+      const tableData = Array.isArray(node.data.tableData) && node.data.tableData.length > 0
+        ? node.data.tableData
+        : parseDelimitedTextToMatrix(node.data.rawData || '');
+      return extractDataFromMatrix(tableData, node.data.ranges || [], node.data.useFirstRowAsHeader !== false);
     } catch (e) { return { data: [], headers: [] }; }
   }
 
@@ -340,33 +364,13 @@ const calcData = (nId: string, nodes: CustomNode[], edges: Edge[], wbs: any): { 
     if (!wb) return { data: [], headers: [] };
     const ws = wb.Sheets[node.data.currentSheet || wb.SheetNames[0]];
     if (!ws) return { data: [], headers: [] };
-    const rngs = node.data.ranges || [];
-    const useHdr = node.data.useFirstRowAsHeader !== false;
-
     try {
       const mat = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", blankrows: true }) as any[][];
-      if (!mat || mat.length === 0) return { data: [], headers: [] };
-      let tRngs = rngs.length === 0 && ws['!ref'] ? [XLSX.utils.encode_range(XLSX.utils.decode_range(ws['!ref']))] : rngs;
-      let fHdrs: string[] = [], cData: any[] = [];
-
-      tRngs.forEach((rStr: string, idx: number) => {
-        const rObj = XLSX.utils.decode_range(rStr);
-        const extRows: any[][] = [];
-        for (let r = rObj.s.r; r <= rObj.e.r; r++) extRows.push(Array.from({ length: rObj.e.c - rObj.s.c + 1 }, (_, i) => (mat[r] || [])[rObj.s.c + i] ?? ""));
-        if (extRows.length === 0) return;
-
-        if (idx === 0) {
-          fHdrs = useHdr ? extRows[0].map((h, i) => h ? String(h) : `Col_${i+1}`) : Array.from({length: extRows[0].length}, (_, i) => `Col_${i+1}`);
-          for (let i = useHdr ? 1 : 0; i < extRows.length; i++) {
-            const obj: any = {}; fHdrs.forEach((h, cIdx) => obj[h] = extRows[i][cIdx]); cData.push(obj);
-          }
-        } else {
-          for (let i = 0; i < extRows.length; i++) {
-            const obj: any = {}; fHdrs.forEach((h, cIdx) => obj[h] = extRows[i][cIdx]); cData.push(obj);
-          }
-        }
-      });
-      return { data: cData, headers: fHdrs };
+        if (!mat || mat.length === 0) return { data: [], headers: [] };
+        const ranges = (node.data.ranges || []).length === 0 && ws['!ref']
+          ? [XLSX.utils.encode_range(XLSX.utils.decode_range(ws['!ref']))]
+          : (node.data.ranges || []);
+        return extractDataFromMatrix(mat, ranges, node.data.useFirstRowAsHeader !== false);
     } catch (e) { return { data: [], headers: [] }; }
   }
 
@@ -404,7 +408,6 @@ const calcData = (nId: string, nodes: CustomNode[], edges: Edge[], wbs: any): { 
       return { data: vData, headers: [...rA.headers, newColName] };
     }
 
-    // ★ Join ロジックの修正（多対多、1対多の対応）
     const { keyA, keyB, joinType = 'inner' } = node.data;
     if (!keyA || !keyB) return rA;
 
@@ -450,18 +453,12 @@ const calcData = (nId: string, nodes: CustomNode[], edges: Edge[], wbs: any): { 
   if (node.type === 'filterNode') {
     const { filterCol, filterVal, matchType = 'includes' } = node.data;
     if (filterCol && filterVal !== undefined && filterVal !== '') {
-      out = out.filter(r => {
-        const cVal = String(r[filterCol as string] || '').toLowerCase(), tVal = String(filterVal).toLowerCase();
-        const cNum = Number(r[filterCol as string]), tNum = Number(filterVal);
-        switch (matchType) {
-          case 'exact': return cVal === tVal;
-          case 'not': return cVal !== tVal;
-          case 'gt': return (!isNaN(cNum) && !isNaN(tNum)) ? cNum > tNum : cVal > tVal;
-          case 'lt': return (!isNaN(cNum) && !isNaN(tNum)) ? cNum < tNum : cVal < tVal;
-          default: return cVal.includes(tVal);
-        }
-      });
+      out = out.filter(r => matchesCondition(r, filterCol as string, filterVal, matchType));
     }
+  }
+
+  if (node.type === 'dataCheckNode') {
+    return { data: out, headers: h };
   }
 
   if (node.type === 'selectNode') {
@@ -478,7 +475,6 @@ const calcData = (nId: string, nodes: CustomNode[], edges: Edge[], wbs: any): { 
         if (!grps[k]) grps[k] = { [groupCol as string]: k, _v: 0, _c: 0 };
         grps[k]._v += Number(r[aggCol as string]) || 0; grps[k]._c++;
       });
-      // ★ Group By ロジックの修正: count なら _c, sum なら _v を返す
       out = Object.values(grps).map((g: any) => ({ [groupCol as string]: g[groupCol as string], [aggCol as string]: aggType === 'count' ? g._c : g._v }));
       h = [groupCol, aggCol];
     }
@@ -561,8 +557,12 @@ const calcData = (nId: string, nodes: CustomNode[], edges: Edge[], wbs: any): { 
           v = match ? (node.data.trueVal || '') : (node.data.falseVal || '');
         }
 
-        return { ...r, [targetCol as string]: v };
+        const outCol = (node.data.createNewCol && node.data.newColName) ? node.data.newColName : targetCol;
+        return { ...r, [outCol as string]: v };
       });
+      if (node.data.createNewCol && node.data.newColName && !h.includes(node.data.newColName)) {
+        h = [...h, node.data.newColName];
+      }
     }
   }
 
@@ -587,142 +587,83 @@ const calcData = (nId: string, nodes: CustomNode[], edges: Edge[], wbs: any): { 
 
         return { ...r, [newColName]: result };
       });
-      h = [...h, newColName];
+      h = [...new Set([...h, newColName])];
     }
   }
 
   return { data: out, headers: h };
 };
 
-const useNodeLogic = (id: string) => {
-  const { nodeFlowData, isAutoCameraMove, focusNode, theme, activePreviewId } = useContext(AppContext);
-  const { updateNodeData, setNodes, setEdges, getEdges } = useReactFlow();
-  const isDark = theme === 'dark';
-  
-  return { 
-    fData: nodeFlowData[id] || { incomingHeaders: [], headersA: [], headersB: [] }, 
-    isDark,
-    activePreviewId,
-    onChg: (k: string, v: any) => {
-      updateNodeData(id, { [k]: v });
-      if (['command', 'joinType', 'chartType', 'matchType', 'aggType', 'groupCol', 'sortCol', 'targetCol', 'filterCol', 'xAxis', 'yAxis', 'applyCond', 'dataType', 'fetchCol', 'colA', 'colB', 'operator', 'newColName'].includes(k)) {
-        focusNode(id);
-      }
-    }, 
-    onDel: () => { 
-      if (isAutoCameraMove) {
-        const edges = getEdges();
-        const incomingEdge = edges.find((e: any) => e.target === id);
-        if (incomingEdge) {
-          focusNode(incomingEdge.source);
-        }
-      }
-      setNodes((nds: any) => nds.filter((n: any) => n.id !== id)); 
-      setEdges((eds: any) => eds.filter((e: any) => e.source !== id && e.target !== id)); 
-    } 
-  };
-};
-
-const TgtHandle = ({ id, style }: any) => <Handle type="target" position={Position.Left} id={id} style={style} className="react-flow__handle z-10 -ml-2 nodrag" />;
-const SrcHandle = () => <Handle type="source" position={Position.Right} className="react-flow__handle z-10 -mr-2 nodrag" />;
-
-const NodeWrap = memo(({ id, title, col, children, showTgt = true, multi = false, summary = '', helpText = '' }: any) => {
-  const { onDel, isDark, activePreviewId } = useNodeLogic(id);
-  const [showHelp, setShowHelp] = useState(false);
-  const [isCollapsed, setIsCollapsed] = useState(false);
-  
-  const isPreview = activePreviewId === id;
-  const borderClass = isPreview 
-    ? `border-blue-500 ring-2 ring-blue-500 shadow-[0_0_15px_rgba(59,130,246,0.5)] ${isDark ? 'ring-offset-[#1a1a1a]' : 'ring-offset-gray-50'} ring-offset-2`
-    : (isDark ? 'border-[#444]' : 'border-gray-300');
-
-  return (
-    <div className={`${isDark ? 'bg-[#252526]' : 'bg-white'} border ${borderClass} rounded-xl shadow-2xl min-w-[260px] pb-1 relative group/node transition-colors`}>
-      <button onClick={(e) => { e.stopPropagation(); onDel(); }} className="absolute -top-3 -right-3 bg-blue-600 hover:bg-blue-500 text-white rounded-full w-6 h-6 flex items-center justify-center font-bold text-xs opacity-0 group-hover/node:opacity-100 transition-opacity shadow-lg z-20 nodrag">
-        <span className="flex items-center justify-center w-3 h-3">{Icons.Close}</span>
-      </button>
-      <div 
-        className={`${isDark ? 'bg-[#1a1a1a] border-[#444]' : 'bg-gray-50 border-gray-300'} p-2 border-b flex justify-between items-center rounded-t-xl select-none group/header cursor-pointer transition-colors`}
-        onDoubleClick={() => setIsCollapsed(!isCollapsed)}
-      >
-        <div className="flex items-center gap-2">
-          <button 
-            onClick={(e) => { e.stopPropagation(); setIsCollapsed(!isCollapsed); }}
-            className={`${isDark ? 'text-[#888] hover:text-white' : 'text-gray-500 hover:text-gray-800'} transition-colors flex items-center justify-center w-4 h-4 nodrag`}
-            title={isCollapsed ? "展開する" : "最小化する"}
-          >
-            {isCollapsed ? Icons.ChevronDown : Icons.ChevronUp}
-          </button>
-          <span className={`text-[10px] font-bold tracking-widest uppercase ${col}`}>{title}</span>
-          {helpText && (
-            <div className="relative flex items-center">
-              <button 
-                onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowHelp(!showHelp); }}
-                className={`text-[10px] flex items-center justify-center w-4 h-4 rounded-full border nodrag transition-colors ${showHelp ? 'bg-blue-500 text-white border-blue-500' : (isDark ? 'text-[#888] hover:text-white border-[#555] bg-[#222]' : 'text-gray-500 hover:text-gray-800 border-gray-300 bg-gray-100')}`}
-              >
-                ?
-              </button>
-              {showHelp && (
-                <div className={`absolute left-6 top-1/2 -translate-y-1/2 w-56 ${isDark ? 'bg-[#111] text-[#ccc] border-[#444]' : 'bg-white text-gray-700 border-gray-300'} text-[11px] p-3 rounded-lg border z-50 shadow-2xl normal-case tracking-normal leading-relaxed`}>
-                  {helpText}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-        {summary && <span className={`text-[9px] ${isDark ? 'bg-[#333] text-[#aaa]' : 'bg-gray-200 text-gray-600'} px-2 py-0.5 rounded-full max-w-[100px] truncate font-mono`} title={summary}>{summary}</span>}
-      </div>
-      <div className={`relative transition-all ${isCollapsed ? 'h-8' : 'p-4 flex flex-col gap-3'}`}>
-        {multi ? <><TgtHandle id="input-a" style={{ top: '30%' }} /><TgtHandle id="input-b" style={{ top: '70%' }} /></> : (showTgt && <TgtHandle />)}
-        <div className={isCollapsed ? 'hidden' : 'contents'}>
-          {children}
-        </div>
-      </div>
-      <SrcHandle />
-    </div>
-  );
-});
-
 const DataNode = memo(({ id, data }: any) => {
-  const { setWorkbooks, setRangeModalNode, focusNode, theme } = useContext(AppContext);
+  const { setWorkbooks, setRangeModalNode, setPasteEditorNode, focusNode, theme } = useContext(AppContext);
   const { updateNodeData } = useReactFlow();
   const isDark = theme === 'dark';
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
 
-  const onUp = (e: any) => {
-    const f = e.target.files?.[0]; if (!f) return;
-    const r = new FileReader(); r.onload = (evt: any) => {
+  const processFile = (f: File | Blob, fileName: string, pathStr: string) => {
+    const r = new FileReader();
+    r.onload = (evt: any) => {
       const wb = XLSX.read(evt.target.result, { type: 'binary' });
       setWorkbooks((p: any) => ({ ...p, [id]: wb }));
-      updateNodeData(id, { fileName: f.name, sheetNames: wb.SheetNames, currentSheet: wb.SheetNames[0], needsUpload: false });
+      updateNodeData(id, { fileName, filePath: pathStr, sheetNames: wb.SheetNames, currentSheet: wb.SheetNames[0], needsUpload: false });
       focusNode(id);
-    }; r.readAsBinaryString(f);
+    };
+    r.readAsBinaryString(f as Blob);
   };
+
+  const onUp = (e: any) => {
+    const f = e.target.files?.[0]; 
+    if (!f) return;
+    processFile(f, f.name, (f as any).path || f.name);
+    e.target.value = '';
+  };
+
+  const tryAutoReload = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    const targetPath = data.filePath || data.fileName;
+    if (!targetPath) {
+      fileInputRef.current?.click();
+      return;
+    }
+    try {
+      const res = await fetch(targetPath);
+      if (!res.ok) throw new Error('Fetch failed');
+      const blob = await res.blob();
+      processFile(blob, data.fileName, targetPath);
+    } catch (err) {
+      console.log("Auto reload failed, opening file picker...");
+      fileInputRef.current?.click();
+    }
+  };
+
   const summary = data.fileName ? data.fileName : '';
   return (
-    <NodeWrap id={id} title="Source" col={isDark ? "text-blue-400" : "text-blue-600"} showTgt={false} summary={summary} helpText="ローカルのCSVやExcelファイルを選択して読み込みます。パネルから抽出範囲やヘッダーの設定が可能です。">
+    <NodeWrap id={id} data={data} title="Source" col={isDark ? "text-blue-400" : "text-blue-600"} showTgt={false} summary={summary} helpText="ローカルのCSVやExcelファイルを選択して読み込みます。パネルから抽出範囲やヘッダーの設定が可能です。">
+      <input type="file" accept=".csv,.xlsx" className="hidden" ref={fileInputRef} onChange={onUp} />
       {data.needsUpload ? (
         <div className="space-y-3">
           <div className={`text-[10px] ${isDark ? 'text-white bg-blue-500/20 border-blue-500/50' : 'text-gray-800 bg-blue-50 border-blue-200'} flex items-center gap-2 p-2 rounded border`}>
             <span className={`${isDark ? 'text-blue-400' : 'text-blue-600'} flex items-center justify-center`}>{Icons.Warning}</span> Missing: {data.fileName}
           </div>
-          <label className={`cursor-pointer ${isDark ? 'text-blue-400 border-blue-500/50 hover:bg-blue-500/20' : 'text-blue-600 border-blue-300 hover:bg-blue-50'} text-[10px] border border-dashed p-3 rounded flex items-center justify-center gap-2 font-bold uppercase transition-colors shadow-sm animate-pulse nodrag`}>
-            <span className="flex items-center justify-center">{Icons.Folder}</span> 再設定 <input type="file" accept=".csv,.xlsx" className="hidden" onChange={onUp} />
-          </label>
+          <button onClick={tryAutoReload} className={`w-full ${isDark ? 'text-blue-400 border-blue-500/50 hover:bg-blue-500/20' : 'text-blue-600 border-blue-300 hover:bg-blue-50'} text-[10px] border border-dashed p-3 rounded flex items-center justify-center gap-2 font-bold uppercase transition-colors shadow-sm animate-pulse nodrag`}>
+            <span className="flex items-center justify-center">{Icons.Folder}</span> 再設定
+          </button>
         </div>
       ) : !data.fileName ? (
-        <label className={`cursor-pointer ${isDark ? 'text-blue-400 border-blue-500/50 hover:bg-blue-500/10' : 'text-blue-600 border-blue-300 hover:bg-blue-50'} text-[10px] border border-dashed p-4 rounded flex items-center justify-center gap-2 font-bold uppercase transition-colors nodrag`}>
-          <span className="flex items-center justify-center w-4 h-4">{Icons.Folder}</span> Load File <input type="file" accept=".csv,.xlsx" className="hidden" onChange={onUp} />
-        </label>
+        <button onClick={() => fileInputRef.current?.click()} className={`w-full ${isDark ? 'text-blue-400 border-blue-500/50 hover:bg-blue-500/10' : 'text-blue-600 border-blue-300 hover:bg-blue-50'} text-[10px] border border-dashed p-4 rounded flex items-center justify-center gap-2 font-bold uppercase transition-colors nodrag`}>
+          <span className="flex items-center justify-center w-4 h-4">{Icons.Folder}</span> Load File
+        </button>
       ) : (
         <div className="space-y-3">
           <div className={`flex justify-between items-center ${isDark ? 'bg-[#1a1a1a] border-[#333]' : 'bg-gray-50 border-gray-200'} p-2 rounded border transition-colors`}>
             <div className={`text-[10px] ${isDark ? 'text-white' : 'text-gray-800'} font-bold truncate flex items-center gap-2`}>
               <span className={`${isDark ? 'text-blue-400' : 'text-blue-600'} flex items-center justify-center`}>{Icons.File}</span> {data.fileName}
             </div>
-            <label className={`cursor-pointer ${isDark ? 'text-blue-400 hover:text-white' : 'text-blue-600 hover:text-gray-900'} text-[12px] font-bold uppercase transition-colors nodrag`} title="Change File">
-              <span className="flex items-center justify-center">{Icons.Refresh}</span> <input type="file" className="hidden" onChange={onUp} />
-            </label>
+            <button onClick={() => fileInputRef.current?.click()} className={`cursor-pointer ${isDark ? 'text-blue-400 hover:text-white' : 'text-blue-600 hover:text-gray-900'} text-[12px] font-bold uppercase transition-colors nodrag`} title="Change File">
+              <span className="flex items-center justify-center">{Icons.Refresh}</span>
+            </button>
           </div>
+          <button onClick={() => setPasteEditorNode({ nodeId: id, selectionMode: false })} className={`w-full py-2 ${isDark ? 'bg-[#252526] text-blue-400 border-[#444] hover:bg-[#333]' : 'bg-white text-blue-600 border-gray-300 hover:bg-blue-50'} text-[10px] font-bold rounded border uppercase tracking-widest transition-colors nodrag`}>表を編集</button>
           <button onClick={() => setRangeModalNode(id)} className={`w-full py-2 ${isDark ? 'bg-blue-600/20 text-blue-400 border-blue-500/30 hover:bg-blue-600/40' : 'bg-blue-50 text-blue-600 border-blue-200 hover:bg-blue-100'} text-[10px] font-bold rounded border uppercase tracking-widest transition-colors nodrag`}>範囲選択</button>
           <label className="flex items-center gap-2 pt-2 cursor-pointer group"><input type="checkbox" checked={data.useFirstRowAsHeader !== false} onChange={(e) => updateNodeData(id, { useFirstRowAsHeader: e.target.checked })} className="accent-blue-500 w-4 h-4 cursor-pointer nodrag" /><span className={`text-[10px] ${isDark ? 'text-[#aaa] group-hover:text-white' : 'text-gray-600 group-hover:text-gray-900'} font-bold uppercase transition-colors`}>1行目をヘッダーにする</span></label>
         </div>
@@ -732,7 +673,7 @@ const DataNode = memo(({ id, data }: any) => {
 });
 
 const FolderSourceNode = memo(({ id, data }: any) => {
-  const { setWorkbooks, setRangeModalNode, focusNode, theme } = useContext(AppContext);
+  const { setWorkbooks, setRangeModalNode, setPasteEditorNode, focusNode, theme } = useContext(AppContext);
   const { updateNodeData } = useReactFlow();
   const isDark = theme === 'dark';
   
@@ -811,14 +752,14 @@ const FolderSourceNode = memo(({ id, data }: any) => {
 
   const summary = data.folderName ? `[${data.folderName}] ${data.fileName}` : '';
   return (
-    <NodeWrap id={id} title="Auto Folder" col={isDark ? "text-indigo-400" : "text-indigo-600"} showTgt={false} summary={summary} helpText="指定したフォルダを監視し、その中の『最も新しく更新されたファイル』を自動で読み込みます。毎月の売上データ追加など、定期的な更新作業に便利です。">
+    <NodeWrap id={id} data={data} title="Auto Folder" col={isDark ? "text-indigo-400" : "text-indigo-600"} showTgt={false} summary={summary} helpText="指定したフォルダを監視し、その中の『最も新しく更新されたファイル』を自動で読み込みます。毎月の売上データ追加など、定期的な更新作業に便利です。">
       {data.needsUpload ? (
         <div className="space-y-3">
           <div className={`text-[10px] ${isDark ? 'text-white bg-indigo-500/20 border-indigo-500/50' : 'text-gray-800 bg-indigo-50 border-indigo-200'} flex items-center gap-2 p-2 rounded border`}>
             <span className={`${isDark ? 'text-indigo-400' : 'text-indigo-500'} flex items-center justify-center`}>{Icons.Warning}</span> Missing: {data.folderName}
           </div>
           <button onClick={triggerClick} disabled={isLoading} className={`w-full ${isDark ? 'text-indigo-400 border-indigo-500/50 hover:bg-indigo-500/20' : 'text-indigo-600 border-indigo-300 hover:bg-indigo-50'} text-[10px] border border-dashed p-3 rounded flex items-center justify-center gap-2 font-bold uppercase transition-colors shadow-sm animate-pulse disabled:opacity-50 nodrag`}>
-            <span className="flex items-center justify-center">{Icons.FolderAuto}</span> {isLoading ? '読込中...' : 'フォルダを再選択'}
+            <span className="flex items-center justify-center">{Icons.FolderAuto}</span> フォルダを再選択
           </button>
         </div>
       ) : !data.folderName ? (
@@ -838,6 +779,7 @@ const FolderSourceNode = memo(({ id, data }: any) => {
               </button>
             </div>
           </div>
+          <button onClick={() => setPasteEditorNode({ nodeId: id, selectionMode: false })} className={`w-full py-2 ${isDark ? 'bg-[#252526] text-indigo-400 border-[#444] hover:bg-[#333]' : 'bg-white text-indigo-600 border-gray-300 hover:bg-indigo-50'} text-[10px] font-bold rounded border uppercase tracking-widest transition-colors nodrag`}>表を編集</button>
           <button onClick={() => setRangeModalNode(id)} className={`w-full py-2 ${isDark ? 'bg-indigo-600/20 text-indigo-400 border-indigo-500/30 hover:bg-indigo-600/40' : 'bg-indigo-50 text-indigo-600 border-indigo-200 hover:bg-indigo-100'} text-[10px] font-bold rounded border uppercase tracking-widest transition-colors nodrag`}>範囲選択</button>
           <label className="flex items-center gap-2 pt-2 cursor-pointer group"><input type="checkbox" checked={data.useFirstRowAsHeader !== false} onChange={(e) => updateNodeData(id, { useFirstRowAsHeader: e.target.checked })} className="accent-indigo-500 w-4 h-4 cursor-pointer nodrag" /><span className={`text-[10px] ${isDark ? 'text-[#aaa] group-hover:text-white' : 'text-gray-600 group-hover:text-gray-900'} font-bold uppercase transition-colors`}>1行目をヘッダーにする</span></label>
         </div>
@@ -847,92 +789,63 @@ const FolderSourceNode = memo(({ id, data }: any) => {
   );
 });
 
-const WebSourceNode = memo(({ id, data }: any) => {
-  const { focusNode, theme } = useContext(AppContext);
-  const { updateNodeData } = useReactFlow();
-  const isDark = theme === 'dark';
-  const [url, setUrl] = useState(data.url || '');
-  const [loading, setLoading] = useState(false);
-
-  const handleFetch = async () => {
-    setLoading(true);
-    try {
-      const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
-      const res = await fetch(proxyUrl);
-      if (!res.ok) throw new Error('Network response was not ok');
-      const json = await res.json();
-      if (!json.contents) throw new Error('No contents');
-      const text = json.contents;
-      
-      updateNodeData(id, { url, fetchedUrl: url, rawData: text });
-      focusNode(id);
-    } catch(e) {
-      console.error(e);
-      alert("データの取得に失敗しました。URLが間違っているか、アクセスが拒否されました。");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const summary = data.fetchedUrl ? `Loaded` : '';
-
-  return (
-    <NodeWrap id={id} title="Web Source" col={isDark ? "text-emerald-400" : "text-emerald-600"} showTgt={false} summary={summary} helpText="指定したURLからデータを取得します。API(JSON)やCSV、またはWebページの表(HTML Table)を自動的に抽出します。">
-      <div className="space-y-3">
-         <div className="flex flex-col gap-2">
-           <input type="text" className={`w-full text-[10px] p-2 border rounded outline-none nodrag transition-colors ${isDark ? 'bg-[#1a1a1a] border-[#444] text-white focus:border-emerald-500' : 'bg-white border-gray-300 text-gray-800 focus:border-emerald-500'}`} placeholder="https://example.com/api/data" value={url} onChange={e=>setUrl(e.target.value)} />
-           <button onClick={handleFetch} disabled={loading || !url} className={`w-full bg-gray-800 hover:bg-gray-700 disabled:opacity-50 text-white text-[10px] font-bold py-2 rounded nodrag shadow-sm transition-all active:scale-95 flex items-center justify-center gap-1.5`}>
-             {loading ? '取得中...' : <><span className="flex items-center justify-center">{Icons.Web}</span> データ取得</>}
-           </button>
-         </div>
-         <div className="space-y-1">
-           <label className={`text-[8px] ${isDark ? 'text-[#888]' : 'text-gray-500'} font-bold uppercase tracking-widest`}>Data Type</label>
-           <select className={`w-full text-[10px] p-1.5 border rounded outline-none nodrag transition-colors ${isDark ? 'bg-[#1a1a1a] border-[#444] text-[#ccc] hover:border-emerald-400' : 'bg-white border-gray-300 text-gray-700 hover:border-emerald-500'}`} value={data.dataType || 'auto'} onChange={(e) => updateNodeData(id, { dataType: e.target.value })}>
-             <option value="auto">自動判別 (Auto)</option>
-             <option value="json">JSON API</option>
-             <option value="csv">CSVファイル</option>
-             <option value="html">Webページ (表抽出)</option>
-           </select>
-         </div>
-         {data.fetchedUrl && <div className={`text-[8px] truncate mt-2 p-1.5 rounded border ${isDark ? 'text-emerald-400 bg-emerald-900/20 border-emerald-500/30' : 'text-emerald-700 bg-emerald-50 border-emerald-200'}`}>Loaded: {data.fetchedUrl}</div>}
-      </div>
-    </NodeWrap>
-  )
-});
-
 const PasteNode = memo(({ id, data }: any) => {
-  const { focusNode, theme } = useContext(AppContext);
+  const { focusNode, theme, setPasteEditorNode } = useContext(AppContext);
   const { updateNodeData } = useReactFlow();
   const isDark = theme === 'dark';
-  const [text, setText] = useState(data.rawData || '');
-
-  const handleApply = () => {
-    updateNodeData(id, { rawData: text });
-    focusNode(id);
-  };
-
-  const summary = data.rawData ? `Loaded` : '';
+  const matrix = sanitizeMatrix(data.tableData || parseDelimitedTextToMatrix(data.rawData || ''));
+  const rowCount = matrix.length;
+  const colCount = Math.max(...matrix.map((row) => row.length), 0);
+  const summary = rowCount > 0 && colCount > 0 ? `${rowCount}x${colCount}` : '';
 
   return (
-    <NodeWrap id={id} title="Paste Data" col={isDark ? "text-orange-400" : "text-orange-600"} showTgt={false} summary={summary} helpText="Excelやスプレッドシート、CSVなどのデータを直接ここに貼り付けてデータソースとして使用します。">
+    <NodeWrap id={id} data={data} title="Paste Data" col={isDark ? "text-orange-400" : "text-orange-600"} showTgt={false} summary={summary} helpText="貼り付けたデータをそのまま表形式で編集できます。セル編集、行列追加、ヘッダー設定、範囲選択に対応します。">
       <div className="space-y-3">
-         <textarea 
-           className={`w-full text-[10px] p-2 border rounded outline-none nodrag custom-scrollbar transition-colors ${isDark ? 'bg-[#1a1a1a] border-[#444] text-[#ccc] focus:border-orange-400' : 'bg-white border-gray-300 text-gray-800 focus:border-orange-500'} h-24 whitespace-pre`} 
-           placeholder="タブ区切り(Excelコピペ等)やカンマ区切りのテキストを貼り付けてください..." 
-           value={text} 
-           onChange={e=>setText(e.target.value)} 
-         />
-         <button onClick={handleApply} disabled={!text} className={`w-full bg-gray-800 hover:bg-gray-700 disabled:opacity-50 text-white text-[10px] font-bold py-2 rounded nodrag shadow-sm transition-all active:scale-95 flex items-center justify-center gap-1.5`}>
-           <span className="flex items-center justify-center">{Icons.Paste}</span> データを適用
-         </button>
+        <div className={`rounded-lg border p-3 space-y-2 transition-colors ${isDark ? 'bg-[#1a1a1a] border-[#333]' : 'bg-gray-50 border-gray-200'}`}>
+          <div className={`text-[10px] font-bold ${isDark ? 'text-white' : 'text-gray-800'}`}>
+            {rowCount} rows / {colCount} cols
+          </div>
+          <div className={`text-[9px] leading-relaxed ${isDark ? 'text-[#888]' : 'text-gray-500'}`}>
+            直接入力、Excelの貼り付け、セル編集、抽出範囲の設定に対応。
+          </div>
+          {data.ranges?.length > 0 && (
+            <div className={`text-[8px] font-mono rounded border px-2 py-1 truncate ${isDark ? 'text-orange-300 bg-orange-500/10 border-orange-500/30' : 'text-orange-700 bg-orange-50 border-orange-200'}`}>
+              Range: {data.ranges.join(', ')}
+            </div>
+          )}
+        </div>
+        <button
+          onClick={() => setPasteEditorNode({ nodeId: id, selectionMode: false })}
+          className="w-full bg-gray-800 hover:bg-gray-700 text-white text-[10px] font-bold py-2 rounded nodrag shadow-sm transition-all active:scale-95 flex items-center justify-center gap-1.5"
+        >
+          <span className="flex items-center justify-center">{Icons.Paste}</span> 表を編集
+        </button>
+        <button
+          onClick={() => {
+            setPasteEditorNode({ nodeId: id, selectionMode: true });
+            focusNode(id);
+          }}
+          className={`w-full py-2 border rounded text-[10px] font-bold uppercase tracking-widest transition-colors nodrag ${isDark ? 'bg-orange-600/20 text-orange-300 border-orange-500/30 hover:bg-orange-600/40' : 'bg-orange-50 text-orange-700 border-orange-200 hover:bg-orange-100'}`}
+        >
+          範囲選択
+        </button>
+        <label className="flex items-center gap-2 pt-1 cursor-pointer group">
+          <input
+            type="checkbox"
+            checked={data.useFirstRowAsHeader !== false}
+            onChange={(e) => updateNodeData(id, { useFirstRowAsHeader: e.target.checked })}
+            className="accent-orange-500 w-4 h-4 cursor-pointer nodrag"
+          />
+          <span className={`text-[10px] font-bold uppercase transition-colors ${isDark ? 'text-[#aaa] group-hover:text-white' : 'text-gray-600 group-hover:text-gray-900'}`}>1行目をヘッダーにする</span>
+        </label>
       </div>
     </NodeWrap>
   )
 });
 
-const UnionNode = memo(({ id }: any) => {
+const UnionNode = memo(({ id, data }: any) => {
   const { isDark } = useNodeLogic(id);
-  return <NodeWrap id={id} title="Union" col={isDark ? "text-blue-400" : "text-blue-600"} multi={true} summary="Append" helpText="2つのデータを「縦」に繋ぎ合わせます。（例: 1月のデータと2月のデータを1つの表にする）"><div className={`text-[10px] ${isDark ? 'text-[#888]' : 'text-gray-500'} text-center italic tracking-widest uppercase py-2`}>Merge Vertically</div></NodeWrap>
+  return <NodeWrap id={id} data={data} title="Union" col={isDark ? "text-blue-400" : "text-blue-600"} multi={true} summary="Append" helpText="2つのデータを「縦」に繋ぎ合わせます。（例: 1月のデータと2月のデータを1つの表にする）"><div className={`text-[10px] ${isDark ? 'text-[#888]' : 'text-gray-500'} text-center italic tracking-widest uppercase py-2`}>Merge Vertically</div></NodeWrap>
 });
 
 const JoinNode = memo(({ id, data }: any) => {
@@ -941,7 +854,7 @@ const JoinNode = memo(({ id, data }: any) => {
   const inputClass = `w-full text-[10px] p-2 border rounded outline-none transition-colors nodrag ${isDark ? 'bg-[#1a1a1a] border-[#444] hover:border-blue-400' : 'bg-white border-gray-300 hover:border-blue-500'}`;
   
   return (
-    <NodeWrap id={id} title="Join" col={isDark ? "text-blue-400" : "text-blue-600"} multi={true} summary={summary} helpText="2つのデータを共通の「キー（列）」を使って「横」に繋ぎ合わせます。">
+    <NodeWrap id={id} data={data} title="Join" col={isDark ? "text-blue-400" : "text-blue-600"} multi={true} summary={summary} helpText="2つのデータを共通の「キー（列）」を使って「横」に繋ぎ合わせます。">
       <div className="space-y-3">
         <select className={`${inputClass} ${isDark ? 'text-white' : 'text-gray-800'} font-bold`} value={data.joinType || 'inner'} onChange={(e) => onChg('joinType', e.target.value)}>
           <option value="inner">INNER JOIN (共通のみ)</option>
@@ -967,7 +880,7 @@ const VlookupNode = memo(({ id, data }: any) => {
   const inputClass = `w-full text-[10px] p-2 border rounded outline-none transition-colors nodrag ${isDark ? 'bg-[#1a1a1a] border-[#444] text-[#ccc] hover:border-pink-400 focus:border-pink-400' : 'bg-white border-gray-300 text-gray-700 hover:border-pink-500 focus:border-pink-500'}`;
 
   return (
-    <NodeWrap id={id} title="VLOOKUP" col={isDark ? "text-pink-400" : "text-pink-600"} multi={true} summary={summary} helpText="上(A)のデータの指定列をキーとして、下(B)のマスタデータを検索し、一致する行の特定列の値を新しい列として追加します。">
+    <NodeWrap id={id} data={data} title="VLOOKUP" col={isDark ? "text-pink-400" : "text-pink-600"} multi={true} summary={summary} helpText="上(A)のデータの指定列をキーとして、下(B)のマスタデータを検索し、一致する行の特定列の値を新しい列として追加します。">
       <div className="space-y-3">
         <div className="space-y-1">
           <label className={`text-[8px] ${isDark ? 'text-[#888]' : 'text-gray-500'} uppercase tracking-widest font-bold`}>Search Key (A)</label>
@@ -996,7 +909,7 @@ const MinusNode = memo(({ id, data }: any) => {
   const inputClass = `w-full text-[10px] p-2 border rounded outline-none transition-colors nodrag ${isDark ? 'bg-[#1a1a1a] border-[#444] text-[#ccc] hover:border-rose-400' : 'bg-white border-gray-300 text-gray-700 hover:border-rose-500'}`;
 
   return (
-    <NodeWrap id={id} title="Minus" col={isDark ? "text-rose-500" : "text-rose-600"} multi={true} summary={summary} helpText="上(A)のデータから、下(B)のデータに存在するレコードを差し引いて残りのデータを抽出します。">
+    <NodeWrap id={id} data={data} title="Minus" col={isDark ? "text-rose-500" : "text-rose-600"} multi={true} summary={summary} helpText="上(A)のデータから、下(B)のデータに存在するレコードを差し引いて残りのデータを抽出します。">
       <div className="space-y-3">
         <div className="space-y-1">
           <label className={`text-[8px] ${isDark ? 'text-[#888]' : 'text-gray-500'} uppercase tracking-widest font-bold`}>Target Key (A)</label>
@@ -1017,7 +930,7 @@ const CalculateNode = memo(({ id, data }: any) => {
   const inputClass = `w-full text-[10px] p-2 border rounded outline-none transition-colors nodrag ${isDark ? 'bg-[#1a1a1a] border-[#444] text-[#ccc] hover:border-teal-400' : 'bg-white border-gray-300 text-gray-700 hover:border-teal-500'}`;
 
   return (
-    <NodeWrap id={id} title="Calculate" col={isDark ? "text-teal-400" : "text-teal-600"} summary={summary} helpText="2つの列を使って計算（足し算や文字列結合など）を行い、新しい列として追加します。">
+    <NodeWrap id={id} data={data} title="Calculate" col={isDark ? "text-teal-400" : "text-teal-600"} summary={summary} helpText="2つの列を使って計算（足し算や文字列結合など）を行い、新しい列として追加します。">
       <div className="space-y-2">
         <select className={inputClass} value={data.colA || ''} onChange={(e) => onChg('colA', e.target.value)}>
           <option value="">Column A...</option>
@@ -1049,7 +962,7 @@ const SortNode = memo(({ id, data }: any) => {
   const inputClass = `w-full text-[10px] p-2 border rounded outline-none transition-colors nodrag ${isDark ? 'bg-[#1a1a1a] border-[#444] text-[#ccc] hover:border-blue-400' : 'bg-white border-gray-300 text-gray-700 hover:border-blue-500'}`;
 
   return (
-    <NodeWrap id={id} title="Sort" col={isDark ? "text-blue-400" : "text-blue-600"} summary={summary} helpText="指定した列の値を使って、データを昇順（小さい順）または降順（大きい順）に並び替えます。">
+    <NodeWrap id={id} data={data} title="Sort" col={isDark ? "text-blue-400" : "text-blue-600"} summary={summary} helpText="指定した列の値を使って、データを昇順（小さい順）または降順（大きい順）に並び替えます。">
       <div className="space-y-2">
         <select className={inputClass} value={data.sortCol || ''} onChange={(e) => onChg('sortCol', e.target.value)}><option value="">Target Column...</option>{fData.incomingHeaders?.map((h: string) => <option key={h} value={h}>{h}</option>)}</select>
         <select className={inputClass} value={data.sortOrder || 'asc'} onChange={(e) => onChg('sortOrder', e.target.value)}><option value="asc">Ascending ↑</option><option value="desc">Descending ↓</option></select>
@@ -1072,7 +985,7 @@ const TransformNode = memo(({ id, data }: any) => {
   const inputClassWhite = `w-full text-[10px] p-2 border rounded outline-none transition-colors nodrag ${isDark ? 'bg-[#1a1a1a] border-[#444] text-white focus:border-blue-400 hover:border-blue-400' : 'bg-white border-gray-300 text-gray-900 focus:border-blue-500 hover:border-blue-500'}`;
 
   return (
-    <NodeWrap id={id} title="Transform" col={isDark ? "text-blue-400" : "text-blue-600"} summary={summary} helpText="データの内容を書き換えたり、型を変換したり、欠損値を補填したりする強力なクレンジングノードです。">
+    <NodeWrap id={id} data={data} title="Transform" col={isDark ? "text-blue-400" : "text-blue-600"} summary={summary} helpText="データの内容を書き換えたり、型を変換したり、欠損値を補填したりする強力なクレンジングノードです。">
       <div className="space-y-2">
         <select className={inputClass} value={data.targetCol || ''} onChange={(e) => onChg('targetCol', e.target.value)}>
           <option value="">{data.command === 'remove_duplicates' ? '全体で重複判定 (All Columns)' : 'Target Column...'}</option>
@@ -1139,6 +1052,18 @@ const TransformNode = memo(({ id, data }: any) => {
             onChange={(v: any) => onChg('param0', v)} 
           />
         )}
+
+        {data.command && data.command !== 'remove_duplicates' && (
+          <div className={`pt-2 border-t ${isDark ? 'border-[#444]' : 'border-gray-200'}`}>
+            <label className="flex items-center gap-2 cursor-pointer group mb-2">
+              <input type="checkbox" checked={data.createNewCol || false} onChange={(e) => onChg('createNewCol', e.target.checked)} className="accent-blue-500 w-3 h-3 cursor-pointer nodrag" />
+              <span className={`text-[9px] font-bold transition-colors ${isDark ? 'text-[#aaa] group-hover:text-white' : 'text-gray-500 group-hover:text-gray-900'}`}>新しい列として追加する</span>
+            </label>
+            {data.createNewCol && (
+              <NodeInput className={`w-full text-[10px] p-2 border rounded outline-none transition-colors ${isDark ? 'bg-[#1a1a1a] border-[#444] text-white focus:border-blue-400' : 'bg-white border-gray-300 text-gray-900 focus:border-blue-500'}`} placeholder="新しい列名 (例: New_Price)" value={data.newColName || ''} onChange={(v: any) => onChg('newColName', v)} />
+            )}
+          </div>
+        )}
       </div>
     </NodeWrap>
   );
@@ -1147,12 +1072,12 @@ const TransformNode = memo(({ id, data }: any) => {
 const FilterNode = memo(({ id, data }: any) => {
   const { fData, onChg, isDark } = useNodeLogic(id);
   const chgVal = (v: string, t: string) => onChg('filterVal', (t === 'gt' || t === 'lt') ? v.replace(/[０-９．－]/g, s => String.fromCharCode(s.charCodeAt(0) - 0xFEE0)).replace(/[^0-9.-]/g, '') : v);
-  const op = data.matchType === 'gt' ? '>' : data.matchType === 'lt' ? '<' : data.matchType === 'exact' ? '=' : data.matchType === 'not' ? '≠' : 'inc';
+  const op = getCheckOperatorLabel(data.matchType);
   const summary = data.filterCol ? `${data.filterCol} ${op} ${data.filterVal || ''}` : '';
   const inputClass = `w-full text-[10px] p-2 border rounded outline-none transition-colors nodrag ${isDark ? 'bg-[#1a1a1a] border-[#444] hover:border-blue-400' : 'bg-white border-gray-300 hover:border-blue-500'}`;
 
   return (
-    <NodeWrap id={id} title="Filter" col={isDark ? "text-blue-400" : "text-blue-600"} summary={summary} helpText="指定した列の値が、入力した条件に一致する行だけを抽出して残します。（例: 売上が1000以上、など）">
+    <NodeWrap id={id} data={data} title="Filter" col={isDark ? "text-blue-400" : "text-blue-600"} summary={summary} helpText="指定した列の値が、入力した条件に一致する行だけを抽出して残します。（例: 売上が1000以上、など）">
       <div className="space-y-2">
         <select className={`${inputClass} ${isDark ? 'text-[#ccc]' : 'text-gray-700'}`} value={data.filterCol || ''} onChange={(e) => onChg('filterCol', e.target.value)}><option value="">Target Column...</option>{fData.incomingHeaders?.map((h: string) => <option key={h} value={h}>{h}</option>)}</select>
         <div className="flex flex-col gap-2">
@@ -1170,7 +1095,7 @@ const SelectNode = memo(({ id, data }: any) => {
   const { fData, onChg, isDark } = useNodeLogic(id);
   const summary = data.selectedColumns?.length ? `${data.selectedColumns.length} cols selected` : '';
   return (
-    <NodeWrap id={id} title="Select" col={isDark ? "text-blue-400" : "text-blue-600"} summary={summary} helpText="データの中で「必要な列（カラム）」だけを選んで残し、不要な列を削除します。">
+    <NodeWrap id={id} data={data} title="Select" col={isDark ? "text-blue-400" : "text-blue-600"} summary={summary} helpText="データの中で「必要な列（カラム）」だけを選んで残し、不要な列を削除します。">
       <div className={`max-h-48 overflow-y-auto space-y-1 p-1 rounded border custom-scrollbar ${isDark ? 'bg-[#1a1a1a] border-[#333]' : 'bg-gray-50 border-gray-200'}`}>
         {fData.incomingHeaders?.length > 0 ? fData.incomingHeaders.map((h: string) => (
           <label key={h} className={`flex items-center gap-2 text-[10px] p-1.5 rounded cursor-pointer group ${isDark ? 'text-[#ccc] hover:bg-[#333]' : 'text-gray-700 hover:bg-gray-200'}`}><input type="checkbox" checked={(data.selectedColumns || []).includes(h)} onChange={(e) => { const c = data.selectedColumns || []; onChg('selectedColumns', e.target.checked ? [...c, h] : c.filter((x: string) => x !== h)); }} className="accent-blue-500 w-3 h-3 nodrag" /><span className={`truncate ${isDark ? 'group-hover:text-white' : 'group-hover:text-gray-900'}`}>{h}</span></label>
@@ -1186,7 +1111,7 @@ const GroupByNode = memo(({ id, data }: any) => {
   const inputClass = `w-full text-[10px] p-2 border rounded outline-none transition-colors nodrag ${isDark ? 'bg-[#1a1a1a] border-[#444] text-[#ccc] hover:border-blue-400' : 'bg-white border-gray-300 text-gray-700 hover:border-blue-500'}`;
 
   return (
-    <NodeWrap id={id} title="Group By" col={isDark ? "text-blue-400" : "text-blue-600"} summary={summary} helpText="指定したキーでデータをグループ化し、数値を合計(SUM)したり件数をカウント(CNT)したりして集計します。">
+    <NodeWrap id={id} data={data} title="Group By" col={isDark ? "text-blue-400" : "text-blue-600"} summary={summary} helpText="指定したキーでデータをグループ化し、数値を合計(SUM)したり件数をカウント(CNT)したりして集計します。">
       <div className="space-y-3">
         <div className="space-y-1">
           <label className={`text-[8px] ${isDark ? 'text-[#888]' : 'text-gray-500'} uppercase tracking-widest font-bold`}>Group Key</label>
@@ -1210,7 +1135,7 @@ const ChartNode = memo(({ id, data }: any) => {
   const inputClass = `w-full text-[9px] p-2 border rounded outline-none transition-colors nodrag ${isDark ? 'bg-[#1a1a1a] border-[#444] text-[#ccc] hover:border-blue-400' : 'bg-white border-gray-300 text-gray-700 hover:border-blue-500'}`;
 
   return (
-    <NodeWrap id={id} title="Visualizer" col={isDark ? "text-blue-400" : "text-blue-600"} summary={summary} helpText="データをグラフとして描画します。配置したグラフは下部の「Dashboard」タブで一覧表示できます。">
+    <NodeWrap id={id} data={data} title="Visualizer" col={isDark ? "text-blue-400" : "text-blue-600"} summary={summary} helpText="データをグラフとして描画します。配置したグラフは下部の「Dashboard」タブで一覧表示できます。">
       <div className="space-y-2">
         <select className={`w-full text-[10px] p-2 border rounded outline-none font-bold transition-colors nodrag ${isDark ? 'bg-[#1a1a1a] border-[#444] text-white hover:border-blue-400' : 'bg-white border-gray-300 text-gray-900 hover:border-blue-500'}`} value={data.chartType || 'bar'} onChange={(e) => onChg('chartType', e.target.value)}>
           <option value="bar">Bar Chart</option>
@@ -1225,16 +1150,16 @@ const ChartNode = memo(({ id, data }: any) => {
   );
 });
 
-const nodeTypesObj = { dataNode: DataNode, folderSourceNode: FolderSourceNode, webSourceNode: WebSourceNode, pasteNode: PasteNode, unionNode: UnionNode, joinNode: JoinNode, vlookupNode: VlookupNode, minusNode: MinusNode, groupByNode: GroupByNode, sortNode: SortNode, transformNode: TransformNode, calculateNode: CalculateNode, selectNode: SelectNode, filterNode: FilterNode, chartNode: ChartNode };
+const nodeTypesObj = { dataNode: DataNode, folderSourceNode: FolderSourceNode, pasteNode: PasteNode, unionNode: UnionNode, joinNode: JoinNode, vlookupNode: VlookupNode, minusNode: MinusNode, groupByNode: GroupByNode, sortNode: SortNode, transformNode: TransformNode, calculateNode: CalculateNode, selectNode: SelectNode, filterNode: FilterNode, dataCheckNode: DataCheckNode, chartNode: ChartNode };
 
 const NodeNavigator = ({ tList, nodes }: { tList: any[], nodes: CustomNode[] }) => {
-  const { focusNode, theme } = useContext(AppContext);
-  const [isMinimized, setIsMinimized] = useState(false);
+  const { focusNode, theme, nodeFlowData } = useContext(AppContext);
+  const [isMinimized, setIsMinimized] = useState(true);
   const isDark = theme === 'dark';
 
   if (isMinimized) {
     return (
-      <Panel position="top-right" className={`${isDark ? 'bg-[#252526]/90 border-[#444] hover:bg-[#333]' : 'bg-white/90 border-gray-200 hover:bg-gray-50'} backdrop-blur-md border rounded-xl shadow-xl z-50 m-4 mr-6 cursor-pointer transition-colors no-print`} onClick={() => setIsMinimized(false)}>
+      <Panel position="top-left" className={`${isDark ? 'bg-[#252526]/90 border-[#444] hover:bg-[#333]' : 'bg-white/90 border-gray-200 hover:bg-gray-50'} backdrop-blur-md border rounded-xl shadow-xl z-50 m-4 ml-6 cursor-pointer transition-colors no-print`} onClick={() => setIsMinimized(false)}>
         <div className={`flex items-center gap-2 p-2 px-3 text-[10px] font-bold uppercase tracking-widest ${isDark ? 'text-[#888]' : 'text-gray-500'}`}>
           <span className={`${isDark ? 'text-blue-400' : 'text-blue-500'} flex items-center justify-center`}>{Icons.Diamond}</span>
           <span className={isDark ? 'text-white' : 'text-gray-800'}>{nodes.length} Nodes</span>
@@ -1244,7 +1169,7 @@ const NodeNavigator = ({ tList, nodes }: { tList: any[], nodes: CustomNode[] }) 
   }
 
   return (
-    <Panel position="top-right" className={`${isDark ? 'bg-[#252526]/90 border-[#444]' : 'bg-white/90 border-gray-200'} backdrop-blur-md border p-3 rounded-xl shadow-xl max-h-[300px] overflow-y-auto custom-scrollbar flex flex-col gap-1.5 w-60 z-50 m-4 mr-6 no-print transition-colors`}>
+    <Panel position="top-left" className={`${isDark ? 'bg-[#252526]/90 border-[#444]' : 'bg-white/90 border-gray-200'} backdrop-blur-md border p-3 rounded-xl shadow-xl max-h-[300px] overflow-y-auto custom-scrollbar flex flex-col gap-1.5 w-60 z-50 m-4 ml-6 no-print transition-colors`}>
       <div className={`text-[10px] font-bold uppercase tracking-widest mb-2 px-1 flex items-center justify-between border-b pb-2 ${isDark ? 'text-[#888] border-[#444]' : 'text-gray-500 border-gray-200'}`}>
         <span className="flex items-center gap-1.5"><span className={`${isDark ? 'text-blue-400' : 'text-blue-500'} flex items-center justify-center`}>{Icons.Diamond}</span> Navigator</span>
         <div className="flex items-center gap-2">
@@ -1259,9 +1184,12 @@ const NodeNavigator = ({ tList, nodes }: { tList: any[], nodes: CustomNode[] }) 
         let subText = n.id;
         
         if ((n.type === 'dataNode' || n.type === 'folderSourceNode') && n.data.fileName) subText = n.data.fileName;
-        else if (n.type === 'webSourceNode' && n.data.fetchedUrl) subText = "Loaded";
-        else if (n.type === 'pasteNode' && n.data.rawData) subText = "Loaded";
-        else if (n.type === 'filterNode' && n.data.filterCol) subText = `${n.data.filterCol} ${n.data.matchType} ${n.data.filterVal || ''}`;
+        else if (n.type === 'pasteNode' && n.data.tableData?.length) subText = `${n.data.tableData.length} rows`;
+        else if (n.type === 'filterNode' && n.data.filterCol) subText = `${n.data.filterCol} ${getCheckOperatorLabel(n.data.matchType)} ${n.data.filterVal || ''}`;
+        else if (n.type === 'dataCheckNode') {
+          const checkResult = nodeFlowData[n.id]?.checkResult;
+          subText = checkResult?.isConfigured ? (checkResult.hasMatches ? `NG ${checkResult.count}件` : 'OK 0件') : 'Check Data';
+        }
         else if (n.type === 'chartNode' && n.data.chartType) subText = `${n.data.chartType} chart`;
         else if (n.type === 'transformNode' && (n.data.targetCol || n.data.command === 'remove_duplicates')) subText = `${n.data.command === 'case_when' ? 'CASE WHEN' : (n.data.command || '...')} on ${n.data.targetCol || 'All'}`;
         else if (n.type === 'calculateNode' && n.data.newColName) subText = `Add ${n.data.newColName}`;
@@ -1275,7 +1203,7 @@ const NodeNavigator = ({ tList, nodes }: { tList: any[], nodes: CustomNode[] }) 
         return (
           <button 
             key={n.id} 
-            onClick={() => focusNode(n.id, true)} 
+            onClick={() => focusNode(n.id, true, true)} 
             className={`text-left flex items-center gap-3 p-2 rounded-lg transition-all group border border-transparent active:scale-95 ${isDark ? 'hover:bg-[#333] hover:border-[#555]' : 'hover:bg-gray-100 hover:border-gray-300'}`}
           >
             <div className={`w-6 h-6 shrink-0 rounded flex items-center justify-center border ${isDark ? 'bg-[#1a1a1a] border-[#444] text-white' : 'bg-gray-50 border-gray-200 text-gray-800'}`}>
@@ -1295,6 +1223,7 @@ const NodeNavigator = ({ tList, nodes }: { tList: any[], nodes: CustomNode[] }) 
 const FlowBuilder = () => {
   const [workbooks, setWorkbooks] = useState<Record<string, XLSX.WorkBook>>({});
   const [rangeModalNode, setRangeModalNode] = useState<string | null>(null);
+  const [pasteEditorNode, setPasteEditorNode] = useState<{ nodeId: string; selectionMode: boolean } | null>(null);
   
   const { screenToFlowPosition, setCenter, getZoom, getNode } = useReactFlow();
   
@@ -1304,12 +1233,15 @@ const FlowBuilder = () => {
   const [previewTab, setPreviewTab] = useState<'table' | 'chart' | 'dashboard'>('table');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isPreviewOpen, setIsPreviewOpen] = useState(true);
+  const [isPreviewFullscreen, setIsPreviewFullscreen] = useState(false);
   const [isSaveLoadOpen, setIsSaveLoadOpen] = useState(false);
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
   const [isSqlModalOpen, setIsSqlModalOpen] = useState(false);
   
   const [showTutorial, setShowTutorial] = useState(() => !localStorage.getItem('bi-architect-visited'));
   
+  const [contextMenu, setContextMenu] = useState<{ id: string, top: number, left: number } | null>(null);
+
   const [savedFlows, setSavedFlows] = useState<any[]>([]);
   const [bottomHeight, setBottomHeight] = useState(300);
   const [isDragging, setIsDragging] = useState(false);
@@ -1347,34 +1279,153 @@ const FlowBuilder = () => {
     localStorage.setItem('bi-architect-visited', '1');
   };
 
-  const focusNode = useCallback((nodeId: string, force: boolean = false) => {
+  const focusNode = useCallback((nodeId: string, force: boolean = false, instant: boolean = false) => {
     if (!isAutoCameraMove && !force) return;
     
     setTimeout(() => {
       const n = getNode(nodeId) as CustomNode | undefined;
       if (n) {
+        const w = n.measured?.width || 260;
         const h = n.measured?.height || 150;
-        setCenter(n.position.x + CAMERA_OFFSET_X, n.position.y + h / 2, { zoom: getZoom(), duration: 1200 });
+        setCenter(n.position.x + w / 2, n.position.y + h / 2, { zoom: getZoom(), duration: instant ? 0 : 1200 });
       }
     }, 50);
   }, [isAutoCameraMove, getNode, setCenter, getZoom]);
 
+  const onInit = useCallback(() => {
+    setTimeout(() => {
+      focusNode('n-1', true, true);
+    }, 100);
+  }, [focusNode]);
+
+  const sanitizeFlow = useCallback((flowNodes: any[], flowEdges: any[]) => {
+    const validNodes = (flowNodes || [])
+      .filter((n: any) => n.type !== 'webSourceNode')
+      .map((n: any) => {
+        if ((n.type === 'dataNode' || n.type === 'folderSourceNode') && n.data.fileName) {
+          return { ...n, data: { ...n.data, needsUpload: true } };
+        }
+        if (n.type === 'pasteNode') {
+          const tableData = Array.isArray(n.data?.tableData) && n.data.tableData.length > 0
+            ? sanitizeMatrix(n.data.tableData)
+            : parseDelimitedTextToMatrix(n.data?.rawData || '');
+          return {
+            ...n,
+            data: {
+              ...n.data,
+              tableData,
+              rawData: matrixToDelimitedText(tableData),
+              useFirstRowAsHeader: n.data?.useFirstRowAsHeader !== false
+            }
+          };
+        }
+        return n;
+      });
+    const validIds = new Set(validNodes.map((n: any) => n.id));
+    const validEdges = (flowEdges || []).filter((e: any) => validIds.has(e.source) && validIds.has(e.target));
+    return { nodes: validNodes, edges: validEdges };
+  }, []);
+
   const handleSave = (name: string) => { const up = [...savedFlows, { id: Date.now().toString(), name, updatedAt: new Date().toLocaleString(), flow: { nodes, edges } }]; setSavedFlows(up); localStorage.setItem('bi-architect-flows', JSON.stringify(up)); };
-  const handleLoad = (f: any) => { _setNodes(f.flow.nodes.map((n: any) => (n.type === 'dataNode' || n.type === 'folderSourceNode') && n.data.fileName ? { ...n, data: { ...n.data, needsUpload: true } } : n)); _setEdges(f.flow.edges || []); setWorkbooks({}); };
+  const handleLoad = (f: any) => { 
+    const sanitized = sanitizeFlow(f.flow.nodes || [], f.flow.edges || []);
+    _setNodes(sanitized.nodes); 
+    _setEdges(sanitized.edges); 
+    setWorkbooks({}); 
+  };
   const onEdgeContextMenu = useCallback((e: React.MouseEvent, edge: Edge) => { e.preventDefault(); _setEdges((eds: any) => eds.filter((e: any) => e.id !== edge.id)); }, [_setEdges]);
+
+  const onNodeContextMenu = useCallback((e: React.MouseEvent, node: Node) => {
+    e.preventDefault();
+    setContextMenu({ id: node.id, top: e.clientY, left: e.clientX });
+  }, []);
+
+  const handleContextDuplicate = () => {
+    if (!contextMenu) return;
+    const node = nodes.find(n => n.id === contextMenu.id);
+    if (!node) return;
+    const newNode = { ...node, id: `n-${Date.now()}`, position: { x: node.position.x + 50, y: node.position.y + 50 }, selected: true };
+    _setNodes(nds => nds.map(n => ({...n, selected: false})).concat(newNode as any));
+    setContextMenu(null);
+  };
+  const handleContextToggleCollapse = () => {
+    if (!contextMenu) return;
+    _setNodes(nds => nds.map(n => n.id === contextMenu.id ? {...n, data: {...n.data, isCollapsed: !(n.data as any).isCollapsed}} : n));
+    setContextMenu(null);
+  };
+  const handleContextDelete = () => {
+    if (!contextMenu) return;
+    _setNodes(nds => nds.filter(n => n.id !== contextMenu.id));
+    _setEdges(eds => eds.filter(e => e.source !== contextMenu.id && e.target !== contextMenu.id));
+    setContextMenu(null);
+  };
+
+  const handleAutoLayout = useCallback(() => {
+    const levels: Record<string, number> = {};
+    nodes.forEach(n => levels[n.id] = 0);
+    for (let i = 0; i < nodes.length; i++) {
+      edges.forEach(e => {
+        if (levels[e.target] <= levels[e.source]) {
+          levels[e.target] = levels[e.source] + 1;
+        }
+      });
+    }
+    const levelCounts: Record<number, number> = {};
+    const newNodes = nodes.map(n => {
+      const lvl = levels[n.id] || 0;
+      levelCounts[lvl] = (levelCounts[lvl] || 0);
+      const y = levelCounts[lvl] * 250 + 100;
+      levelCounts[lvl]++;
+      return { ...n, position: { x: lvl * 350 + 50, y } };
+    });
+    _setNodes(newNodes);
+  }, [nodes, edges, _setNodes]);
 
   const handleReset = () => {
     _setNodes([{ id: 'n-1', type: 'dataNode', position: { x: 50, y: 150 }, data: { useFirstRowAsHeader: true } }]);
     _setEdges([]);
     setWorkbooks({});
     setIsResetModalOpen(false);
-    setCenter(50 + CAMERA_OFFSET_X, 150 + 75, { zoom: 0.9, duration: 1200 });
+    focusNode('n-1', true);
   };
   
   const handleDeleteFlow = (id: string) => {
     const updated = savedFlows.filter((f: any) => f.id !== id);
     setSavedFlows(updated);
     localStorage.setItem('bi-architect-flows', JSON.stringify(updated));
+  };
+
+  // ★ JSONエクスポート処理
+  const handleExportFile = () => {
+    const flow = { nodes, edges };
+    const blob = new Blob([JSON.stringify(flow, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `VisualDataPrep_Flow_${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // ★ JSONインポート処理
+  const handleImportFile = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const flow = JSON.parse(event.target?.result as string);
+        if (flow.nodes && flow.edges) {
+          const sanitized = sanitizeFlow(flow.nodes, flow.edges);
+          _setNodes(sanitized.nodes);
+          _setEdges(sanitized.edges);
+          setWorkbooks({});
+          setIsSaveLoadOpen(false);
+          setTimeout(() => focusNode('n-1', true, true), 100);
+        }
+      } catch(err) {
+        alert('ファイルの読み込みに失敗しました。');
+      }
+    };
+    reader.readAsText(file);
   };
 
   const startResize = useCallback((e: React.MouseEvent) => {
@@ -1403,7 +1454,24 @@ const FlowBuilder = () => {
         map[n.id] = { headersA: hA, headersB: hB, incomingHeaders: [...new Set([...hA, ...hB])] };
       } else {
         const inEdge = edges.find(e => e.target === n.id);
-        map[n.id] = { incomingHeaders: inEdge ? calcData(inEdge.source, nodes, edges, workbooks).headers : [] };
+        const incoming = inEdge ? calcData(inEdge.source, nodes, edges, workbooks) : { data: [], headers: [] };
+        if (n.type === 'dataCheckNode') {
+          const isConfigured = !!(n.data.checkCol && n.data.checkVal !== undefined && n.data.checkVal !== '');
+          const matchedRows = isConfigured
+            ? incoming.data.filter((row: any) => matchesCondition(row, n.data.checkCol, n.data.checkVal, n.data.checkType || 'includes'))
+            : [];
+          map[n.id] = {
+            incomingHeaders: incoming.headers,
+            checkResult: {
+              count: matchedRows.length,
+              rows: matchedRows.slice(0, 3),
+              hasMatches: matchedRows.length > 0,
+              isConfigured
+            }
+          };
+        } else {
+          map[n.id] = { incomingHeaders: incoming.headers };
+        }
       }
     }); return map;
   }, [sHash, workbooks]); // eslint-disable-line
@@ -1439,8 +1507,7 @@ const FlowBuilder = () => {
   const tList = [
     { t: 'dataNode', l: 'Source', i: Icons.Source, c: 'text-blue-500 dark:text-blue-400', desc: 'CSVやExcelファイルを選択して読み込みます。' },
     { t: 'folderSourceNode', l: 'Auto Folder', i: Icons.FolderAuto, c: 'text-indigo-500 dark:text-indigo-400', desc: '指定フォルダを監視し、中の最新ファイルを自動で読み込みます。' },
-    { t: 'webSourceNode', l: 'Web Source', i: Icons.Web, c: 'text-emerald-500 dark:text-emerald-400', desc: 'URLからAPI(JSON)やCSV、Webページの表(HTML)を取得します。' },
-    { t: 'pasteNode', l: 'Paste Data', i: Icons.Paste, c: 'text-orange-500 dark:text-orange-400', desc: 'Excel等からコピーしたテキストデータを直接貼り付けて読み込みます。' },
+    { t: 'pasteNode', l: 'Paste Data', i: Icons.Paste, c: 'text-orange-500 dark:text-orange-400', desc: 'Excel等のデータを表形式で直接貼り付け・編集し、範囲選択して読み込みます。' },
     { t: 'unionNode', l: 'Union', i: Icons.Union, c: 'text-blue-500 dark:text-blue-400', desc: '2つのデータを「縦」に繋ぎ合わせます。(データの追加)' },
     { t: 'joinNode', l: 'Join', i: Icons.Join, c: 'text-blue-500 dark:text-blue-400', desc: '2つのデータを共通のキーで「横」に繋ぎます。' },
     { t: 'vlookupNode', l: 'VLOOKUP', i: Icons.Vlookup, c: 'text-pink-500 dark:text-pink-400', desc: '別データから一致するキーを検索し、特定の列の値を新しい列として追加します。' },
@@ -1451,16 +1518,16 @@ const FlowBuilder = () => {
     { t: 'calculateNode', l: 'Calculate', i: Icons.Calculate, c: 'text-teal-500 dark:text-teal-400', desc: '2つの列の値を計算（足し算、文字結合など）し、新しい列として追加します。' },
     { t: 'selectNode', l: 'Select', i: Icons.Select, c: 'text-blue-500 dark:text-blue-400', desc: '必要な列(カラム)だけを選んで残し、不要な列を削除します。' },
     { t: 'filterNode', l: 'Filter', i: Icons.Filter, c: 'text-blue-500 dark:text-blue-400', desc: '条件に一致する行だけを抽出します。(例: 売上1000以上)' },
+    { t: 'dataCheckNode', l: 'Data Check', i: Icons.Warning, c: 'text-sky-500 dark:text-sky-400', desc: '指定条件に一致するデータの有無をチェックし、件数と対象行を表示します。ヒット時は赤、該当なしは青で表示します。' },
     { t: 'chartNode', l: 'Visualizer', i: Icons.Chart, c: 'text-blue-500 dark:text-blue-400', desc: 'データをグラフ化します。Dashboardタブで一覧表示できます。' }
   ];
 
   const isDark = theme === 'dark';
-  
-  const btnClasses = isSidebarOpen ? 'p-3 gap-4' : 'p-2 justify-center w-10 h-10';
+  const btnClasses = isSidebarOpen ? 'p-3 gap-4 w-[calc(100%-0.5rem)] mr-2' : 'p-2 justify-center w-9 h-10 mr-1';
 
   return (
-    <AppContext.Provider value={{ workbooks, setWorkbooks, setRangeModalNode, nodeFlowData, isAutoCameraMove, focusNode, theme, activePreviewId: activePreviewId as string | null }}>
-      <div className={`h-screen w-screen flex flex-col font-sans overflow-hidden transition-colors ${isDark ? 'bg-[#1a1a1a]' : 'bg-gray-50'}`}>
+    <AppContext.Provider value={{ workbooks, setWorkbooks, setRangeModalNode, setPasteEditorNode, nodeFlowData, isAutoCameraMove, focusNode, theme, activePreviewId: activePreviewId as string | null }}>
+      <div className={`h-screen w-screen flex flex-col font-sans overflow-hidden transition-colors ${isDark ? 'bg-[#1a1a1a]' : 'bg-gray-50'}`} onClick={() => setContextMenu(null)}>
         <GlobalStyle />
         <div className={`border-b px-6 py-3 flex justify-between items-center z-40 gap-4 no-print transition-colors ${isDark ? 'bg-[#181818] border-[#333] shadow-md' : 'bg-white border-gray-200 shadow-sm'}`}>
           <a href="#/" className={`text-[13px] font-bold tracking-[0.5em] uppercase flex items-center gap-3 shrink-0 hover:opacity-80 transition-opacity ${isDark ? 'text-white' : 'text-gray-800'}`} title="Back to Home">
@@ -1468,13 +1535,11 @@ const FlowBuilder = () => {
             Visual Data Prep
           </a>
           
-          <div className="flex-1 flex justify-center">
-            <div className={`px-4 py-1.5 rounded-full text-[10px] tracking-widest font-bold flex items-center gap-2 border ${isDark ? 'bg-[#1e1e1e] border-[#333] text-[#aaa]' : 'bg-gray-50 border-gray-200 text-gray-500'}`}>
-              <span className="text-blue-500">{Icons.Diamond}</span> ノードを繋いで構築 <span className={`mx-1 ${isDark ? 'text-[#555]' : 'text-gray-400'}`}>|</span> 接続線は右クリックで削除
-            </div>
-          </div>
-
           <div className="flex items-center gap-3 shrink-0">
+            <button onClick={handleAutoLayout} className={`text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-1.5 shadow-sm active:scale-95 transition-colors border ${isDark ? 'bg-[#252526] hover:bg-[#333] border-[#444] text-[#666]' : 'bg-white hover:bg-gray-50 border-gray-200 text-gray-600'}`} title="Auto Layout">
+              <span className="flex items-center justify-center text-lg">{Icons.Layout}</span> 整列
+            </button>
+
             <button onClick={() => setShowTutorial(true)} className={`text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-2 shadow-sm active:scale-95 transition-colors border ${isDark ? 'bg-[#252526] hover:bg-[#333] border-[#444] text-[#666]' : 'bg-white hover:bg-gray-50 border-gray-200 text-gray-600'}`} title="Tutorial">
               <span className="flex items-center justify-center text-lg">{Icons.Help}</span>
             </button>
@@ -1484,7 +1549,7 @@ const FlowBuilder = () => {
             </button>
 
             <button onClick={() => setIsAutoCameraMove(!isAutoCameraMove)} className={`text-[10px] px-3 py-2 rounded-lg font-bold tracking-widest flex items-center gap-1.5 shadow-sm active:scale-95 transition-colors border ${isDark ? 'bg-[#252526] hover:bg-[#333] border-[#444]' : 'bg-white hover:bg-gray-50 border-gray-200'} ${isAutoCameraMove ? (isDark ? 'text-blue-400' : 'text-blue-500') : (isDark ? 'text-[#666]' : 'text-gray-500')}`} title="Auto Camera Focus">
-              <span className="flex items-center justify-center gap-1">{Icons.Focus}</span> CAMERA FOCUS: {isAutoCameraMove ? 'ON' : 'OFF'}
+              <span className="flex items-center justify-center gap-1">{Icons.Focus}</span> CameraFocus: {isAutoCameraMove ? 'ON' : 'OFF'}
             </button>
             
             <button onClick={() => setIsSqlModalOpen(true)} className={`text-[10px] px-3 py-2 rounded-lg font-bold uppercase tracking-widest flex items-center gap-1.5 shadow-sm active:scale-95 transition-colors border hidden md:flex ${isDark ? 'bg-[#252526] hover:bg-blue-900/30 border-[#444] hover:border-blue-500/50 text-[#aaa] hover:text-blue-400' : 'bg-white hover:bg-gray-50 border-gray-200 text-gray-600'}`}>
@@ -1498,42 +1563,22 @@ const FlowBuilder = () => {
             </button>
           </div>
         </div>
+        
         <div className="flex-1 flex overflow-hidden relative no-print">
-          <aside className={`border-r z-20 flex flex-col transition-all duration-300 ease-in-out ${isDark ? 'bg-[#181818] border-[#333]' : 'bg-white border-gray-200'} ${isSidebarOpen ? 'w-64 py-4 pl-4 pr-2' : 'w-16 py-4 px-2 items-center'}`}>
-            <div className={`flex items-center ${isSidebarOpen ? 'justify-between mb-4 pr-2' : 'justify-center mb-6'} border-b pb-2 ${isDark ? 'border-[#333]' : 'border-gray-200'}`}>
-              {isSidebarOpen && <div className={`text-[10px] font-bold tracking-[0.3em] uppercase ${isDark ? 'text-white' : 'text-gray-800'}`}>Toolbox</div>}
-              <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className={`p-1 rounded transition-colors flex items-center justify-center w-6 h-6 ${isDark ? 'text-[#888] hover:text-white hover:bg-[#333]' : 'text-gray-500 hover:text-gray-800 hover:bg-gray-100'}`}>
-                {isSidebarOpen ? Icons.ArrowLeft : Icons.ArrowRight}
-              </button>
-            </div>
-            <div className={`flex flex-col ${isSidebarOpen ? 'gap-3 pr-2' : 'gap-4 pr-1 w-full items-center'} overflow-y-auto overflow-x-hidden pb-10 custom-scrollbar`}>
-              {tList.map(item => {
-                const hoverBorderClass = isDark ? (item.t === 'calculateNode' ? 'hover:border-teal-500' : item.t === 'vlookupNode' ? 'hover:border-pink-500' : item.t === 'minusNode' ? 'hover:border-rose-500' : item.t === 'webSourceNode' ? 'hover:border-emerald-500' : item.t === 'folderSourceNode' ? 'hover:border-indigo-500' : item.t === 'pasteNode' ? 'hover:border-orange-500' : 'hover:border-blue-500') 
-                                              : (item.t === 'calculateNode' ? 'hover:border-teal-400' : item.t === 'vlookupNode' ? 'hover:border-pink-400' : item.t === 'minusNode' ? 'hover:border-rose-400' : item.t === 'webSourceNode' ? 'hover:border-emerald-400' : item.t === 'folderSourceNode' ? 'hover:border-indigo-400' : item.t === 'pasteNode' ? 'hover:border-orange-400' : 'hover:border-blue-400');
-                return (
-                <div key={item.t} className={`relative group/btn rounded-xl cursor-grab flex items-center transition-all shadow-sm active:scale-95 border ${isDark ? 'bg-[#252526] border-[#333]' : 'bg-white border-gray-200'} ${hoverBorderClass} ${btnClasses}`} onDragStart={(e) => e.dataTransfer.setData('application/reactflow', item.t)} draggable>
-                  <div className={`${item.c} text-lg group-hover/btn:scale-125 transition-transform flex items-center justify-center ${isSidebarOpen ? '' : 'text-xl'}`}>{item.i}</div>
-                  {isSidebarOpen && <span className={`text-[10px] font-bold uppercase tracking-wider truncate ${isDark ? 'text-[#888] group-hover/btn:text-white' : 'text-gray-600 group-hover/btn:text-gray-900'}`}>{item.l}</span>}
-                  <div className={`absolute left-full ml-4 top-1/2 -translate-y-1/2 w-56 text-[11px] p-3 rounded-lg border opacity-0 group-hover/btn:opacity-100 pointer-events-none transition-opacity z-50 shadow-xl hidden md:block normal-case leading-relaxed ${isDark ? 'bg-[#111] text-[#ccc] border-[#444]' : 'bg-white text-gray-700 border-gray-200'}`}>
-                    <div className={`font-bold mb-1 tracking-widest ${isDark ? 'text-white' : 'text-gray-900'}`}>{item.l}</div>
-                    {item.desc}
-                  </div>
-                </div>
-              )})}
-            </div>
-          </aside>
           <div className="flex-1 relative transition-colors">
             <ReactFlow 
               nodes={nodes} 
               edges={edges} 
+              onInit={onInit}
               onNodesChange={onNodesChange} 
               onEdgesChange={onEdgesChange} 
               onConnect={(p) => _setEdges((eds: any) => addEdge({ ...p, animated: true, style: { stroke: '#38bdf8', strokeWidth: 4 } } as any, eds))} 
               onEdgeContextMenu={onEdgeContextMenu} 
+              onNodeContextMenu={onNodeContextMenu}
+              onPaneClick={() => setContextMenu(null)}
               nodeTypes={nodeTypesObj} 
-              onNodeDragStop={(_, node: any) => {
-                focusNode(node.id);
-              }}
+              connectionRadius={50}
+              onNodeDragStop={(_, node: any) => { focusNode(node.id); }}
               onDrop={(e) => { 
                 const t = e.dataTransfer.getData('application/reactflow'); 
                 if (t) {
@@ -1550,17 +1595,55 @@ const FlowBuilder = () => {
               <Controls className={`border fill-gray-600 ${isDark ? 'bg-[#252526] border-[#444]' : 'bg-white border-gray-200'}`} />
               <NodeNavigator tList={tList} nodes={nodes} />
             </ReactFlow>
+
+            {contextMenu && (
+              <div 
+                style={{ top: contextMenu.top, left: contextMenu.left }} 
+                className={`fixed z-[1000] border rounded-xl shadow-2xl p-1.5 w-48 font-bold text-[11px] flex flex-col gap-0.5 transition-colors ${isDark ? 'bg-[#252526] border-[#444]' : 'bg-white border-gray-200'}`}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <button onClick={handleContextDuplicate} className={`w-full text-left px-3 py-2.5 rounded-lg flex items-center gap-2 transition-colors ${isDark ? 'text-[#ccc] hover:bg-[#333] hover:text-white' : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'}`}><span className="w-4 h-4 flex items-center justify-center">{Icons.Copy}</span> 複製 (Duplicate)</button>
+                <button onClick={handleContextToggleCollapse} className={`w-full text-left px-3 py-2.5 rounded-lg flex items-center gap-2 transition-colors ${isDark ? 'text-[#ccc] hover:bg-[#333] hover:text-white' : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'}`}><span className="w-4 h-4 flex items-center justify-center">{Icons.ChevronDown}</span> 最小化 / 展開</button>
+                <button onClick={handleContextDelete} className={`w-full text-left px-3 py-2.5 rounded-lg flex items-center gap-2 transition-colors ${isDark ? 'text-rose-400 hover:bg-rose-500/20' : 'text-rose-600 hover:bg-rose-50'}`}><span className="w-4 h-4 flex items-center justify-center">{Icons.Trash}</span> 削除 (Delete)</button>
+              </div>
+            )}
           </div>
+          
+          <aside className={`border-l z-20 flex flex-col transition-all duration-300 ease-in-out ${isDark ? 'bg-[#181818] border-[#333]' : 'bg-white border-gray-200'} ${isSidebarOpen ? 'w-64 py-4 pr-4 pl-2' : 'w-16 py-4 px-2 items-center'}`}>
+            <div className={`flex items-center ${isSidebarOpen ? 'justify-between mb-4 pl-2' : 'justify-center mb-6'} border-b pb-2 ${isDark ? 'border-[#333]' : 'border-gray-200'}`}>
+              <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className={`p-1 rounded transition-colors flex items-center justify-center w-6 h-6 ${isDark ? 'text-[#888] hover:text-white hover:bg-[#333]' : 'text-gray-500 hover:text-gray-800 hover:bg-gray-100'}`}>
+                {isSidebarOpen ? Icons.ArrowRight : Icons.ArrowLeft}
+              </button>
+              {isSidebarOpen && <div className={`text-[10px] font-bold tracking-[0.3em] uppercase ${isDark ? 'text-white' : 'text-gray-800'}`}>Toolbox</div>}
+            </div>
+            <div className={`flex flex-col ${isSidebarOpen ? 'gap-3 pl-2 pr-1' : 'gap-4 pl-1 pr-1 w-full items-center'} overflow-y-auto overflow-x-hidden pb-10 custom-scrollbar relative`}>
+              {tList.map(item => {
+                const hoverBorderClass = isDark ? (item.t === 'calculateNode' ? 'hover:border-teal-500' : item.t === 'vlookupNode' ? 'hover:border-pink-500' : item.t === 'minusNode' ? 'hover:border-rose-500' : item.t === 'folderSourceNode' ? 'hover:border-indigo-500' : item.t === 'pasteNode' ? 'hover:border-orange-500' : 'hover:border-blue-500') 
+                                              : (item.t === 'calculateNode' ? 'hover:border-teal-400' : item.t === 'vlookupNode' ? 'hover:border-pink-400' : item.t === 'minusNode' ? 'hover:border-rose-400' : item.t === 'folderSourceNode' ? 'hover:border-indigo-400' : item.t === 'pasteNode' ? 'hover:border-orange-400' : 'hover:border-blue-400');
+                return (
+                <div key={item.t} className={`relative group/btn rounded-xl cursor-grab flex items-center transition-all shadow-sm active:scale-95 border ${isDark ? 'bg-[#252526] border-[#333]' : 'bg-white border-gray-200'} ${hoverBorderClass} ${btnClasses}`} onDragStart={(e) => e.dataTransfer.setData('application/reactflow', item.t)} draggable>
+                  <div className={`${item.c} text-lg group-hover/btn:scale-125 transition-transform flex items-center justify-center ${isSidebarOpen ? '' : 'text-xl'}`}>{item.i}</div>
+                  {isSidebarOpen && <span className={`text-[10px] font-bold uppercase tracking-wider truncate ${isDark ? 'text-[#888] group-hover/btn:text-white' : 'text-gray-600 group-hover/btn:text-gray-900'}`}>{item.l}</span>}
+                  <div className={`absolute left-0 top-full mt-2 w-56 text-[11px] p-3 rounded-lg border opacity-0 group-hover/btn:opacity-100 pointer-events-none transition-opacity z-[999] shadow-2xl hidden md:block normal-case leading-relaxed ${isDark ? 'bg-[#111] text-[#ccc] border-[#555]' : 'bg-white text-gray-700 border-gray-300'}`}>
+                    <div className={`font-bold mb-1 tracking-widest ${isDark ? 'text-white' : 'text-gray-900'}`}>{item.l}</div>
+                    {item.desc}
+                  </div>
+                </div>
+              )})}
+            </div>
+          </aside>
         </div>
         
         <div 
-          style={{ height: isPreviewOpen ? bottomHeight : 48, transition: isDragging ? 'none' : 'height 0.3s cubic-bezier(0.4, 0, 0.2, 1)' }} 
-          className={`flex flex-col border-t z-30 relative transition-colors ${isDark ? 'bg-[#1a1a1a] border-[#333] shadow-[0_-10px_40px_rgba(0,0,0,0.5)]' : 'bg-white border-gray-200 shadow-[0_-10px_40px_rgba(0,0,0,0.1)]'}`}
+          style={isPreviewFullscreen ? {} : { height: isPreviewOpen ? bottomHeight : 48, transition: isDragging ? 'none' : 'height 0.3s cubic-bezier(0.4, 0, 0.2, 1)' }} 
+          className={isPreviewFullscreen 
+            ? `fixed inset-0 z-[500] flex flex-col transition-colors ${isDark ? 'bg-[#1a1a1a]' : 'bg-white'}` 
+            : `flex flex-col border-t z-30 relative transition-colors ${isDark ? 'bg-[#1a1a1a] border-[#333] shadow-[0_-10px_40px_rgba(0,0,0,0.5)]' : 'bg-white border-gray-200 shadow-[0_-10px_40px_rgba(0,0,0,0.1)]'}`}
         >
-          {isPreviewOpen && (
+          {isPreviewOpen && !isPreviewFullscreen && (
             <div 
               onMouseDown={startResize} 
-              className={`absolute top-[-3px] left-0 w-full h-2 cursor-row-resize z-50 transition-colors no-print ${isDark ? 'hover:bg-blue-500/50' : 'hover:bg-blue-400/50'}`} 
+              className={`absolute top-[-8px] left-0 w-full h-4 cursor-row-resize z-50 transition-colors no-print ${isDark ? 'hover:bg-blue-500/30' : 'hover:bg-blue-400/30'}`} 
               title="Drag to resize"
             />
           )}
@@ -1583,7 +1666,7 @@ const FlowBuilder = () => {
             
             <div className="flex items-center gap-3">
               {isPreviewOpen && previewTab !== 'dashboard' && (
-                <div className={`flex items-center gap-2 mr-2 border-r pr-4 ${isDark ? 'border-[#444]' : 'border-gray-200'}`}>
+                <div className={`flex items-center gap-2 mr-2 border-r pr-4 ${isDark ? 'border-[#444]' : 'border-gray-300'}`}>
                   <span className={`text-[10px] font-bold uppercase tracking-widest ${isDark ? 'text-[#888]' : 'text-gray-500'}`}>Preview:</span>
                   <select 
                     className={`text-[10px] p-1.5 border rounded outline-none transition-colors cursor-pointer w-40 truncate ${isDark ? 'bg-[#1a1a1a] border-[#444] text-[#ccc] hover:border-blue-400' : 'bg-white border-gray-200 text-gray-700 hover:border-blue-500'}`}
@@ -1596,8 +1679,7 @@ const FlowBuilder = () => {
                       const label = typeInfo ? typeInfo.l : n.type;
                       let sub = n.id;
                       if ((n.type === 'dataNode' || n.type === 'folderSourceNode') && n.data.fileName) sub = n.data.fileName;
-                      else if (n.type === 'webSourceNode' && n.data.fetchedUrl) sub = "Loaded";
-                      else if (n.type === 'pasteNode' && n.data.rawData) sub = "Loaded";
+                      else if (n.type === 'pasteNode' && n.data.tableData?.length) sub = `${n.data.tableData.length} rows`;
                       return <option key={n.id} value={n.id}>{label} - {sub}</option>
                     })}
                   </select>
@@ -1612,6 +1694,11 @@ const FlowBuilder = () => {
                 </>
               )}
               {previewTab !== 'dashboard' && <span className={`text-[10px] font-bold ml-4 ${isDark ? 'text-blue-400' : 'text-blue-600'}`}>{final.data.length} rows</span>}
+              {isPreviewOpen && (
+                <button onClick={() => setIsPreviewFullscreen(!isPreviewFullscreen)} className={`p-1.5 ml-2 rounded transition-colors flex items-center justify-center w-7 h-7 ${isDark ? 'text-[#888] hover:text-white hover:bg-[#333]' : 'text-gray-500 hover:text-gray-800 hover:bg-gray-200'}`} title={isPreviewFullscreen ? "元のサイズに戻す" : "全画面表示"}>
+                  <span className="w-4 h-4 flex items-center justify-center">{isPreviewFullscreen ? Icons.Minimize : Icons.Maximize}</span>
+                </button>
+              )}
             </div>
           </div>
           {isPreviewOpen && (
@@ -1622,7 +1709,6 @@ const FlowBuilder = () => {
                     <tr>{final.headers.map((h, i) => <th key={i} className={`px-5 py-3 font-bold border-r uppercase tracking-wider ${isDark ? 'text-[#888] border-[#333]' : 'text-gray-600 border-gray-200'}`}>{h}</th>)}</tr>
                   </thead>
                   <tbody>
-                    {/* ★ 最大表示行数を 100 -> 80 に変更しました */}
                     {final.data.slice(0, 80).map((row, i) => (
                       <tr key={i} className={`transition-colors border-b ${isDark ? 'hover:bg-[#252526] border-[#222]' : 'hover:bg-gray-50 border-gray-200'}`}>
                         {final.headers.map((h, j) => <td key={j} className={`px-5 py-2 border-r font-mono ${isDark ? 'text-[#ccc] border-[#222]' : 'text-gray-800 border-gray-200'}`}>{row[h]}</td>)}
@@ -1727,7 +1813,7 @@ const FlowBuilder = () => {
                     </div>
                     <div className="flex-1">
                       <div className={`text-[10px] font-bold uppercase tracking-widest mb-1 ${isDark ? 'text-white' : 'text-gray-800'}`}>Step 1: Add Nodes</div>
-                      <p className={`text-[10px] leading-relaxed ${isDark ? 'text-[#888]' : 'text-gray-500'}`}>左の<strong>Toolbox</strong>から、SOURCE(ファイル読み込み)やUNION(結合)などの「ノード」を画面へドラッグ＆ドロップします。</p>
+                      <p className={`text-[10px] leading-relaxed ${isDark ? 'text-[#888]' : 'text-gray-500'}`}>右の<strong>Toolbox</strong>から、SOURCE(ファイル読み込み)やUNION(結合)などの「ノード」を画面へドラッグ＆ドロップします。</p>
                     </div>
                   </div>
 
@@ -1767,7 +1853,16 @@ const FlowBuilder = () => {
           onImport={(n: CustomNode[], e: Edge[]) => { _setNodes(n); _setEdges(e); setWorkbooks({}); }} 
         />
 
-        <SaveLoadModal isOpen={isSaveLoadOpen} onClose={() => setIsSaveLoadOpen(false)} onSave={handleSave} onLoad={handleLoad} onDelete={handleDeleteFlow} flows={savedFlows} />
+        <SaveLoadModal 
+          isOpen={isSaveLoadOpen} 
+          onClose={() => setIsSaveLoadOpen(false)} 
+          onSave={handleSave} 
+          onLoad={handleLoad} 
+          onDelete={handleDeleteFlow} 
+          flows={savedFlows} 
+          onExportFile={handleExportFile}
+          onImportFile={handleImportFile}
+        />
 
         {isResetModalOpen && (
           <div className={`fixed inset-0 z-[300] flex items-center justify-center p-8 backdrop-blur-sm no-print ${isDark ? 'bg-black/80' : 'bg-gray-900/50'}`}>
@@ -1785,9 +1880,276 @@ const FlowBuilder = () => {
           </div>
         )}
 
+        <PasteTableEditorModal
+          isOpen={!!pasteEditorNode}
+          onClose={() => setPasteEditorNode(null)}
+          node={nodes.find((n) => n.id === pasteEditorNode?.nodeId)}
+          initialSelectionMode={pasteEditorNode?.selectionMode}
+          onApply={(nextData: any) => {
+            if (!pasteEditorNode) return;
+            const { workbook, ...nodeData } = nextData;
+            if (workbook) {
+              setWorkbooks((prev) => ({ ...prev, [pasteEditorNode.nodeId]: workbook }));
+            }
+            _setNodes((nds: any[]) => nds.map((n: any) => n.id === pasteEditorNode.nodeId ? { ...n, data: { ...n.data, ...nodeData } } : n));
+          }}
+        />
         {rangeModalNode && <RangeSelectorModal isOpen={true} onClose={() => setRangeModalNode(null)} workbook={workbooks[rangeModalNode]} currentSheet={nodes.find(n => n.id === rangeModalNode)?.data.currentSheet} initialRanges={nodes.find(n => n.id === rangeModalNode)?.data.ranges} initialUseHeader={nodes.find(n => n.id === rangeModalNode)?.data.useFirstRowAsHeader} onRangesConfirm={(r: string[], h: boolean) => { _setNodes((nds: any[]) => nds.map((n: any) => n.id === rangeModalNode ? { ...n, data: { ...n.data, ranges: r, useFirstRowAsHeader: h } } : n)); setRangeModalNode(null); }} />}
       </div>
     </AppContext.Provider>
+  );
+};
+
+const PasteTableEditorModal = ({ isOpen, onClose, node, onApply, initialSelectionMode = false }: any) => {
+  const { theme, workbooks } = useContext(AppContext);
+  const isDark = theme === 'dark';
+  const [tableData, setTableData] = useState<string[][]>(createEmptyMatrix());
+  const [useHeader, setUseHeader] = useState(true);
+  const [ranges, setRanges] = useState<string[]>([]);
+  const [importText, setImportText] = useState('');
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [colWidth, setColWidth] = useState(120);
+  const [dragStart, setDragStart] = useState<{ r: number; c: number } | null>(null);
+  const [dragEnd, setDragEnd] = useState<{ r: number; c: number } | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const isWorkbookNode = node?.type === 'dataNode' || node?.type === 'folderSourceNode';
+    const workbook = node?.id ? workbooks[node.id] : null;
+    const currentSheet = node?.data?.currentSheet || workbook?.SheetNames?.[0];
+    const baseMatrix = isWorkbookNode
+      ? sanitizeMatrix(
+          workbook && currentSheet && workbook.Sheets[currentSheet]
+            ? (XLSX.utils.sheet_to_json(workbook.Sheets[currentSheet], { header: 1, defval: "", blankrows: true }) as any[][])
+            : createEmptyMatrix()
+        )
+      : (Array.isArray(node?.data?.tableData) && node.data.tableData.length > 0
+          ? sanitizeMatrix(node.data.tableData)
+          : parseDelimitedTextToMatrix(node?.data?.rawData || ''));
+    setTableData(baseMatrix);
+    setUseHeader(node?.data?.useFirstRowAsHeader !== false);
+    setRanges(node?.data?.ranges || []);
+    setImportText('');
+    setSelectionMode(!!initialSelectionMode);
+    setDragStart(null);
+    setDragEnd(null);
+  }, [isOpen, node, initialSelectionMode, workbooks]);
+
+  if (!isOpen || !node) return null;
+
+  const isWorkbookNode = node.type === 'dataNode' || node.type === 'folderSourceNode';
+  const workbook = isWorkbookNode ? workbooks[node.id] : null;
+  const currentSheet = node.data?.currentSheet || workbook?.SheetNames?.[0];
+  const normalizedMatrix = sanitizeMatrix(tableData);
+  const colCount = Math.max(...normalizedMatrix.map((row) => row.length), 0);
+  const cols = Array.from({ length: colCount }, (_, idx) => XLSX.utils.encode_col(idx));
+
+  const updateCell = (r: number, c: number, value: string) => {
+    setTableData((prev) => {
+      const next = sanitizeMatrix(prev);
+      next[r][c] = value;
+      return next;
+    });
+  };
+
+  const addRow = () => {
+    setTableData((prev) => [...sanitizeMatrix(prev), Array.from({ length: colCount || 4 }, () => '')]);
+  };
+
+  const addColumn = () => {
+    setTableData((prev) => sanitizeMatrix(prev).map((row) => [...row, '']));
+  };
+
+  const clearTable = () => {
+    setTableData(createEmptyMatrix());
+    setRanges([]);
+    setDragStart(null);
+    setDragEnd(null);
+  };
+
+  const applyImportText = () => {
+    const parsed = parseDelimitedTextToMatrix(importText);
+    setTableData(parsed);
+    setRanges([]);
+    setDragStart(null);
+    setDragEnd(null);
+  };
+
+  const isSelected = (r: number, c: number) => (
+    dragStart &&
+    dragEnd &&
+    c >= Math.min(dragStart.c, dragEnd.c) &&
+    c <= Math.max(dragStart.c, dragEnd.c) &&
+    r >= Math.min(dragStart.r, dragEnd.r) &&
+    r <= Math.max(dragStart.r, dragEnd.r)
+  );
+
+  const pushRange = () => {
+    if (!dragStart || !dragEnd) return;
+    const range = XLSX.utils.encode_range({
+      s: { c: Math.min(dragStart.c, dragEnd.c), r: Math.min(dragStart.r, dragEnd.r) },
+      e: { c: Math.max(dragStart.c, dragEnd.c), r: Math.max(dragStart.r, dragEnd.r) }
+    });
+    setRanges((prev) => prev.includes(range) ? prev : [...prev, range]);
+    setDragStart(null);
+    setDragEnd(null);
+  };
+
+  const saveTable = () => {
+    const nextMatrix = sanitizeMatrix(tableData);
+    if (isWorkbookNode && workbook && currentSheet) {
+      const nextWorkbook = {
+        ...workbook,
+        Sheets: {
+          ...workbook.Sheets,
+          [currentSheet]: XLSX.utils.aoa_to_sheet(nextMatrix)
+        }
+      } as XLSX.WorkBook;
+      onApply({
+        workbook: nextWorkbook,
+        ranges,
+        useFirstRowAsHeader: useHeader
+      });
+    } else {
+      onApply({
+        tableData: nextMatrix,
+        rawData: matrixToDelimitedText(nextMatrix),
+        ranges,
+        useFirstRowAsHeader: useHeader
+      });
+    }
+    onClose();
+  };
+
+  return (
+    <div className={`fixed inset-0 z-[350] flex items-center justify-center p-8 backdrop-blur-md no-print ${isDark ? 'bg-black/90' : 'bg-gray-900/50'}`}>
+      <div className={`border rounded-3xl shadow-2xl w-full h-full flex flex-col overflow-hidden transition-colors ${isDark ? 'bg-[#1e1e1e] border-[#444]' : 'bg-white border-gray-200'}`}>
+        <div className={`p-4 border-b flex justify-between items-center transition-colors ${isDark ? 'bg-[#1a1a1a] border-[#444]' : 'bg-gray-50 border-gray-200'}`}>
+          <div className="space-y-1">
+            <h2 className={`text-[12px] font-bold uppercase tracking-[0.35em] flex items-center gap-2 ${isDark ? 'text-white' : 'text-gray-800'}`}>
+              <span className="text-orange-500 w-4 h-4 flex items-center justify-center">{Icons.Paste}</span>
+              {isWorkbookNode ? `${node.type === 'dataNode' ? 'Source' : 'Auto Folder'} Editor` : 'Paste Data Editor'}
+            </h2>
+            <p className={`text-[10px] ${isDark ? 'text-[#888]' : 'text-gray-500'}`}>
+              {isWorkbookNode ? '現在のシート内容を直接編集できます。保存するとこのノードの読み込み結果に反映されます。' : 'セルを直接編集し、必要に応じて範囲選択で抽出対象を絞り込みます。'}
+            </p>
+          </div>
+          <button onClick={onClose} className={`transition-colors text-xl flex items-center justify-center w-6 h-6 ${isDark ? 'text-[#666] hover:text-white' : 'text-gray-500 hover:text-gray-800'}`}>
+            <span className="w-4 h-4 block flex items-center justify-center">{Icons.Close}</span>
+          </button>
+        </div>
+
+        <div className="flex-1 flex overflow-hidden">
+          <div className={`flex-1 flex flex-col transition-colors ${isDark ? 'bg-[#1a1a1a]' : 'bg-gray-50'}`}>
+            <div className={`p-4 border-b space-y-3 transition-colors ${isDark ? 'border-[#333]' : 'border-gray-200'}`}>
+              <div className="flex flex-wrap gap-2">
+                <button onClick={addRow} className={`px-3 py-2 rounded-lg text-[10px] font-bold border transition-colors ${isDark ? 'bg-[#252526] border-[#444] text-white hover:bg-[#333]' : 'bg-white border-gray-300 text-gray-800 hover:bg-gray-100'}`}>行追加</button>
+                <button onClick={addColumn} className={`px-3 py-2 rounded-lg text-[10px] font-bold border transition-colors ${isDark ? 'bg-[#252526] border-[#444] text-white hover:bg-[#333]' : 'bg-white border-gray-300 text-gray-800 hover:bg-gray-100'}`}>列追加</button>
+                <button onClick={() => setSelectionMode((prev) => !prev)} className={`px-3 py-2 rounded-lg text-[10px] font-bold border transition-colors ${selectionMode ? 'bg-orange-600 text-white border-orange-500' : (isDark ? 'bg-[#252526] border-[#444] text-[#ccc] hover:bg-[#333]' : 'bg-white border-gray-300 text-gray-800 hover:bg-gray-100')}`}>{selectionMode ? '選択モード中' : '範囲選択モード'}</button>
+                <button onClick={clearTable} className={`px-3 py-2 rounded-lg text-[10px] font-bold border transition-colors ${isDark ? 'bg-[#252526] border-[#444] text-rose-300 hover:bg-rose-500/20' : 'bg-white border-gray-300 text-rose-600 hover:bg-rose-50'}`}>表をクリア</button>
+              </div>
+              <div className="flex flex-col gap-2">
+                <textarea
+                  value={importText}
+                  onChange={(e) => setImportText(e.target.value)}
+                  placeholder="ExcelやCSVの内容をここに貼り付けてから、下のボタンで表へ反映できます。"
+                  className={`w-full h-20 text-[11px] p-3 border rounded-xl outline-none resize-none custom-scrollbar transition-colors ${isDark ? 'bg-[#111] border-[#333] text-[#ddd] focus:border-orange-400' : 'bg-white border-gray-300 text-gray-800 focus:border-orange-500'}`}
+                />
+                <button onClick={applyImportText} disabled={!importText.trim()} className="self-start bg-orange-600 hover:bg-orange-500 disabled:opacity-30 text-white px-4 py-2 rounded-lg text-[10px] font-bold uppercase shadow-sm transition-all">
+                  貼り付け内容を表に反映
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-auto custom-scrollbar">
+              <table className="border-collapse table-fixed min-w-full">
+                <thead className={`sticky top-0 z-10 transition-colors ${isDark ? 'bg-[#252526]' : 'bg-gray-100'}`}>
+                  <tr>
+                    <th className={`w-12 border-b ${isDark ? 'border-[#444]' : 'border-gray-300'}`}></th>
+                    {cols.map((col) => (
+                      <th key={col} style={{ width: colWidth }} className={`px-3 py-1.5 border-r border-b text-[10px] font-bold ${isDark ? 'border-[#444] text-[#888]' : 'border-gray-300 text-gray-600'}`}>{col}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {normalizedMatrix.map((row, r) => (
+                    <tr key={r}>
+                      <td className={`w-12 border-r border-b text-center text-[10px] font-mono ${isDark ? 'bg-[#252526] border-[#444] text-[#666]' : 'bg-gray-100 border-gray-300 text-gray-500'}`}>{r + 1}</td>
+                      {row.map((value, c) => (
+                        <td
+                          key={`${r}-${c}`}
+                          style={{ width: colWidth }}
+                          onMouseDown={selectionMode ? () => { setDragStart({ r, c }); setDragEnd({ r, c }); } : undefined}
+                          onMouseOver={selectionMode ? () => dragStart && setDragEnd({ r, c }) : undefined}
+                          onMouseUp={selectionMode ? pushRange : undefined}
+                          className={`border-r border-b align-top ${selectionMode ? 'cursor-crosshair select-none' : ''} ${isSelected(r, c) ? (isDark ? 'bg-orange-500/40 border-orange-400' : 'bg-orange-100 border-orange-300') : (isDark ? 'border-[#2a2a2a]' : 'border-gray-200')}`}
+                        >
+                          {selectionMode ? (
+                            <div className={`px-2 py-1.5 h-[34px] truncate text-[11px] ${isDark ? 'text-[#ddd] hover:bg-[#222]' : 'text-gray-800 hover:bg-gray-100'}`}>
+                              {value}
+                            </div>
+                          ) : (
+                            <input
+                              type="text"
+                              value={value}
+                              onChange={(e) => updateCell(r, c, e.target.value)}
+                              className={`w-full px-2 py-1.5 text-[11px] outline-none nodrag transition-colors ${isDark ? 'bg-transparent text-white focus:bg-[#222]' : 'bg-white text-gray-800 focus:bg-orange-50'}`}
+                            />
+                          )}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className={`w-80 border-l p-6 flex flex-col gap-5 transition-colors ${isDark ? 'bg-[#252526] border-[#444]' : 'bg-white border-gray-200'}`}>
+            <h3 className={`text-[10px] font-bold uppercase border-b pb-3 ${isDark ? 'text-[#888] border-[#444]' : 'text-gray-600 border-gray-200'}`}>Editor Settings</h3>
+            <div className="space-y-3">
+              <label className="flex items-center gap-3 cursor-pointer group">
+                <input type="checkbox" checked={useHeader} onChange={(e) => setUseHeader(e.target.checked)} className="w-4 h-4 accent-orange-500" />
+                <span className={`text-[11px] uppercase font-bold transition-colors ${isDark ? 'text-[#ccc] group-hover:text-white' : 'text-gray-700 group-hover:text-gray-900'}`}>1行目をヘッダーにする</span>
+              </label>
+              <div className="space-y-2">
+                <div className={`text-[9px] font-bold uppercase ${isDark ? 'text-[#888]' : 'text-gray-500'}`}>Column Width</div>
+                <input type="range" min="80" max="240" value={colWidth} onChange={(e) => setColWidth(Number(e.target.value))} className="w-full accent-orange-500" />
+              </div>
+              <div className={`text-[10px] leading-relaxed rounded-xl border p-3 ${isDark ? 'bg-[#1a1a1a] border-[#333] text-[#aaa]' : 'bg-gray-50 border-gray-200 text-gray-600'}`}>
+                {selectionMode ? 'セルをドラッグすると範囲を追加できます。' : 'セルを直接編集できます。Excelの貼り付けは上部の入力欄を使います。'}
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-auto space-y-3 pr-2 custom-scrollbar">
+              <div className="flex items-center justify-between">
+                <div className={`text-[10px] font-bold uppercase ${isDark ? 'text-white' : 'text-gray-800'}`}>Selected Ranges</div>
+                {ranges.length > 0 && (
+                  <button onClick={() => setRanges([])} className={`text-[9px] font-bold transition-colors ${isDark ? 'text-rose-300 hover:text-rose-200' : 'text-rose-600 hover:text-rose-700'}`}>全削除</button>
+                )}
+              </div>
+              {ranges.length === 0 && <div className={`text-[10px] ${isDark ? 'text-[#666]' : 'text-gray-400'}`}>未設定なら表全体を対象にします。</div>}
+              {ranges.map((range, idx) => (
+                <div key={range} className={`p-3 rounded-xl border flex justify-between items-center ${isDark ? 'bg-[#1a1a1a] border-[#444]' : 'bg-gray-50 border-gray-200'}`}>
+                  <div className="flex flex-col">
+                    <span className={`text-[8px] font-bold uppercase tracking-widest ${isDark ? 'text-[#555]' : 'text-gray-500'}`}>Range {idx + 1}</span>
+                    <span className={`text-[11px] font-mono font-bold ${isDark ? 'text-orange-300' : 'text-orange-700'}`}>{range}</span>
+                  </div>
+                  <button onClick={() => setRanges((prev) => prev.filter((_, rangeIdx) => rangeIdx !== idx))} className={`transition-colors flex items-center justify-center w-5 h-5 ${isDark ? 'text-[#555] hover:text-white' : 'text-gray-400 hover:text-gray-800'}`}>
+                    <span className="w-4 h-4 flex items-center justify-center">{Icons.Close}</span>
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex gap-3">
+              <button onClick={onClose} className={`flex-1 py-3 rounded-xl text-[10px] font-bold uppercase tracking-widest transition-colors ${isDark ? 'bg-[#333] hover:bg-[#444] text-white' : 'bg-gray-200 hover:bg-gray-300 text-gray-800'}`}>Close</button>
+              <button onClick={saveTable} className="flex-1 py-3 bg-orange-600 hover:bg-orange-500 text-white rounded-xl text-[10px] font-bold uppercase tracking-widest shadow-xl transition-all">Apply</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 };
 
@@ -1820,8 +2182,6 @@ const SqlModal = ({ isOpen, onClose, nodes, edges, onImport }: any) => {
         if (n.data.ranges && n.data.ranges.length > 0) {
           from += ` /* Range: ${n.data.ranges.join(', ')} */`;
         }
-      } else if (n.type === 'webSourceNode') {
-        from = n.data.fetchedUrl ? `\`${n.data.fetchedUrl}\`` : "web_data";
       } else if (n.type === 'pasteNode') {
         from = "pasted_data";
       }
@@ -1876,7 +2236,8 @@ const SqlModal = ({ isOpen, onClose, nodes, edges, onImport }: any) => {
                  const actualOp = n.data.condOp === 'includes' ? 'LIKE' : op;
                  func = `CASE WHEN \`${n.data.condCol}\` ${actualOp} ${val} THEN ${func} ELSE \`${n.data.targetCol}\` END`;
              }
-             select = select === "*" ? `*, ${func} AS \`${n.data.targetCol}\`` : `${select}, ${func} AS \`${n.data.targetCol}\``;
+             const outCol = (n.data.createNewCol && n.data.newColName) ? n.data.newColName : n.data.targetCol;
+             select = select === "*" ? `*, ${func} AS \`${outCol}\`` : `${select}, ${func} AS \`${outCol}\``;
           }
         }
       }
@@ -2024,11 +2385,19 @@ const SqlModal = ({ isOpen, onClose, nodes, edges, onImport }: any) => {
   );
 };
 
-const SaveLoadModal = ({ isOpen, onClose, onSave, onLoad, onDelete, flows }: any) => {
+const SaveLoadModal = ({ isOpen, onClose, onSave, onLoad, onDelete, flows, onExportFile, onImportFile }: any) => {
   const { theme } = useContext(AppContext);
   const isDark = theme === 'dark';
-  const [tab, setTab] = useState<'load' | 'save'>('load'); const [sName, setSName] = useState('');
+  const [tab, setTab] = useState<'load' | 'save'>('load'); 
+  const [sName, setSName] = useState('');
   const sortedFlows = useMemo(() => [...flows].sort((a, b) => Number(b.id) - Number(a.id)), [flows]);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      onImportFile(e.target.files[0]);
+    }
+  };
 
   if (!isOpen) return null;
   return (
@@ -2038,24 +2407,31 @@ const SaveLoadModal = ({ isOpen, onClose, onSave, onLoad, onDelete, flows }: any
           <button onClick={() => setTab('load')} className={`flex-1 p-3 text-[11px] font-bold uppercase tracking-widest transition-colors flex items-center justify-center gap-2 ${tab === 'load' ? (isDark ? 'bg-[#252526] text-blue-400 border-b-2 border-blue-400' : 'bg-gray-50 text-blue-600 border-b-2 border-blue-600') : (isDark ? 'text-[#666] hover:bg-[#252526]' : 'text-gray-500 hover:bg-gray-50')}`}><span>{Icons.Folder}</span> Load</button>
           <button onClick={() => setTab('save')} className={`flex-1 p-3 text-[11px] font-bold uppercase tracking-widest transition-colors flex items-center justify-center gap-2 ${tab === 'save' ? (isDark ? 'bg-[#252526] text-white border-b-2 border-white' : 'bg-gray-50 text-gray-900 border-b-2 border-gray-900') : (isDark ? 'text-[#666] hover:bg-[#252526]' : 'text-gray-500 hover:bg-gray-50')}`}><span>{Icons.Save}</span> Save</button>
         </div>
-        <div className={`p-6 h-[300px] overflow-y-auto custom-scrollbar transition-colors ${isDark ? 'bg-[#1a1a1a]' : 'bg-gray-50'}`}>
+        <div className={`p-6 h-[300px] overflow-y-auto custom-scrollbar transition-colors flex flex-col ${isDark ? 'bg-[#1a1a1a]' : 'bg-gray-50'}`}>
           {tab === 'load' ? (
-            <div className="space-y-3">
-              {sortedFlows.length === 0 && <div className={`text-[10px] text-center mt-10 ${isDark ? 'text-[#555]' : 'text-gray-400'}`}>No saved projects</div>}
-              {sortedFlows.map((f: any) => (
-                <div key={f.id} className={`p-4 rounded-xl flex justify-between items-center cursor-pointer group transition-colors border ${isDark ? 'bg-[#252526] border-[#444] hover:border-blue-500/50' : 'bg-white border-gray-200 hover:border-blue-300'}`} onClick={() => { onLoad(f); onClose(); }}>
-                  <div>
-                    <div className={`text-[12px] font-bold transition-colors ${isDark ? 'text-white group-hover:text-blue-400' : 'text-gray-800 group-hover:text-blue-600'}`}>{f.name}</div>
-                    <div className={`text-[9px] mt-1 ${isDark ? 'text-[#666]' : 'text-gray-500'}`}>{f.updatedAt}</div>
+            <div className="flex-1 flex flex-col">
+              <div className="flex gap-2 mb-4 shrink-0">
+                 <button onClick={onExportFile} className={`flex-1 py-2 text-[10px] font-bold rounded-lg border transition-colors ${isDark ? 'bg-[#333] border-[#444] text-[#ccc] hover:bg-[#444] hover:text-white' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'}`}>📤 JSONを出力</button>
+                 <button onClick={() => fileInputRef.current?.click()} className={`flex-1 py-2 text-[10px] font-bold rounded-lg border transition-colors ${isDark ? 'bg-[#333] border-[#444] text-[#ccc] hover:bg-[#444] hover:text-white' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'}`}>📥 JSONを読込</button>
+                 <input type="file" accept=".json" className="hidden" ref={fileInputRef} onChange={handleFileChange} />
+              </div>
+              <div className="space-y-3 overflow-y-auto flex-1 custom-scrollbar pr-2">
+                {sortedFlows.length === 0 && <div className={`text-[10px] text-center mt-10 ${isDark ? 'text-[#555]' : 'text-gray-400'}`}>No saved projects</div>}
+                {sortedFlows.map((f: any) => (
+                  <div key={f.id} className={`p-4 rounded-xl flex justify-between items-center cursor-pointer group transition-colors border ${isDark ? 'bg-[#252526] border-[#444] hover:border-blue-500/50' : 'bg-white border-gray-200 hover:border-blue-300'}`} onClick={() => { onLoad(f); onClose(); }}>
+                    <div>
+                      <div className={`text-[12px] font-bold transition-colors ${isDark ? 'text-white group-hover:text-blue-400' : 'text-gray-800 group-hover:text-blue-600'}`}>{f.name}</div>
+                      <div className={`text-[9px] mt-1 ${isDark ? 'text-[#666]' : 'text-gray-500'}`}>{f.updatedAt}</div>
+                    </div>
+                    <div className="flex gap-2">
+                      <button onClick={(e) => { e.stopPropagation(); onDelete(f.id); }} className={`border px-3 py-2 rounded-lg text-[10px] font-bold shadow-sm transition-all flex items-center justify-center w-8 ${isDark ? 'bg-[#333] text-[#aaa] border-[#555] hover:bg-blue-600 hover:text-white hover:border-blue-500' : 'bg-gray-100 text-gray-500 border-gray-300 hover:bg-blue-600 hover:text-white'}`} title="Delete Project">
+                        <span>{Icons.Close}</span>
+                      </button>
+                      <button className={`border px-5 py-2 rounded-lg text-[10px] font-bold shadow-sm transition-all ${isDark ? 'bg-blue-600/20 text-blue-400 border-blue-500/30 group-hover:bg-blue-600 group-hover:text-white' : 'bg-blue-50 text-blue-600 border-blue-200 group-hover:bg-blue-600 group-hover:text-white'}`}>Load</button>
+                    </div>
                   </div>
-                  <div className="flex gap-2">
-                    <button onClick={(e) => { e.stopPropagation(); onDelete(f.id); }} className={`border px-3 py-2 rounded-lg text-[10px] font-bold shadow-sm transition-all flex items-center justify-center w-8 ${isDark ? 'bg-[#333] text-[#aaa] border-[#555] hover:bg-blue-600 hover:text-white hover:border-blue-500' : 'bg-gray-100 text-gray-500 border-gray-300 hover:bg-blue-600 hover:text-white'}`} title="Delete Project">
-                      <span>{Icons.Close}</span>
-                    </button>
-                    <button className={`border px-5 py-2 rounded-lg text-[10px] font-bold shadow-sm transition-all ${isDark ? 'bg-blue-600/20 text-blue-400 border-blue-500/30 group-hover:bg-blue-600 group-hover:text-white' : 'bg-blue-50 text-blue-600 border-blue-200 group-hover:bg-blue-600 group-hover:text-white'}`}>Load</button>
-                  </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
           ) : (
             <div className="space-y-4 pt-8">
@@ -2090,7 +2466,7 @@ const RangeSelectorModal = ({ isOpen, onClose, workbook, currentSheet, onRangesC
         <div className={`p-4 border-b flex flex-col font-sans transition-colors ${isDark ? 'bg-[#1a1a1a] border-[#444]' : 'bg-gray-50 border-gray-200'}`}>
           <div className="flex justify-between items-center mb-2">
             <h2 className={`text-[12px] font-bold uppercase tracking-[0.4em] flex items-center gap-2 ${isDark ? 'text-white' : 'text-gray-800'}`}>
-              <span className="text-blue-500">{Icons.Select}</span> Visual Range Selection
+              <span className="text-blue-500 w-4 h-4 flex items-center justify-center">{Icons.Select}</span> 抽出範囲の選択
             </h2>
             <div className="flex items-center gap-8">
               <div className="flex items-center gap-3">
@@ -2103,8 +2479,8 @@ const RangeSelectorModal = ({ isOpen, onClose, workbook, currentSheet, onRangesC
             </div>
           </div>
           <p className={`text-[10px] leading-relaxed ${isDark ? 'text-[#888]' : 'text-gray-600'}`}>
-            🖱️ 抽出したいデータの範囲を<strong>マウスでドラッグして選択</strong>してください。（複数の範囲を選択することも可能です）<br/>
-            ✅ 選択後、右側のパネルで<strong>「1行目をヘッダーとして使用する (First row as Header)」</strong>オプションをオンにすると、最初の行が列名として認識されます。
+            抽出したいデータの範囲を<strong>マウスでドラッグして選択</strong>してください。（複数の範囲を選択することも可能です）<br/>
+            選択後、右側のパネルで<strong>「1行目をヘッダーにする」</strong>オプションをオンにすると、最初の行が列名として認識されます。
           </p>
         </div>
         <div className="flex-1 flex overflow-hidden">
@@ -2144,7 +2520,7 @@ const RangeSelectorModal = ({ isOpen, onClose, workbook, currentSheet, onRangesC
             <h3 className={`text-[10px] font-bold uppercase border-b pb-3 ${isDark ? 'text-[#888] border-[#444]' : 'text-gray-600 border-gray-200'}`}>Selection Settings</h3>
             <label className="flex items-center gap-3 cursor-pointer group">
               <input type="checkbox" checked={uHead} onChange={(e) => setUHead(e.target.checked)} className="w-4 h-4 accent-blue-500" />
-              <span className={`text-[11px] uppercase font-bold transition-colors ${isDark ? 'text-[#ccc] group-hover:text-white' : 'text-gray-700 group-hover:text-gray-900'}`}>First row as Header</span>
+              <span className={`text-[11px] uppercase font-bold transition-colors ${isDark ? 'text-[#ccc] group-hover:text-white' : 'text-gray-700 group-hover:text-gray-900'}`}>1行目をヘッダーにする</span>
             </label>
             <div className="flex-1 overflow-auto space-y-3 pr-2 custom-scrollbar">
               {sRanges.map((rs, i) => (
@@ -2154,12 +2530,12 @@ const RangeSelectorModal = ({ isOpen, onClose, workbook, currentSheet, onRangesC
                     <span className={`text-[11px] font-mono font-bold ${isDark ? 'text-blue-400' : 'text-blue-600'}`}>{rs}</span>
                   </div>
                   <button onClick={() => setSRanges(p => p.filter((_, idx) => idx !== i))} className={`transition-colors flex items-center justify-center w-5 h-5 ${isDark ? 'text-[#555] group-hover:text-white' : 'text-gray-400 group-hover:text-gray-800'}`}>
-                    <span>{Icons.Close}</span>
+                    <span className="w-4 h-4 flex items-center justify-center">{Icons.Close}</span>
                   </button>
                 </div>
               ))}
             </div>
-            <button onClick={() => {onRangesConfirm(sRanges, uHead); onClose();}} className="bg-blue-600 hover:bg-blue-500 py-3.5 rounded-xl text-[11px] font-bold text-white uppercase shadow-xl active:scale-95 transition-all">Apply Selection</button>
+            <button onClick={() => {onRangesConfirm(sRanges, uHead); onClose();}} className="bg-blue-600 hover:bg-blue-500 py-3.5 rounded-xl text-[11px] font-bold text-white uppercase shadow-xl active:scale-95 transition-all">選択を適用</button>
           </div>
         </div>
       </div>
