@@ -21,6 +21,7 @@ const LAST_COLUMN_OPTION = '__last__';
 const MAX_CHART_RENDER_POINTS = 1000;
 const PREVIEW_AUTO_PAUSE_MAX_ROWS = 5000;
 const PREVIEW_AUTO_PAUSE_MAX_CELLS = 120000;
+const TUTORIAL_CONTENT_VERSION = 'release-readme-v1';
 
 const DEFAULT_CAMERA_FOCUS_CONFIG: CameraFocusConfig = {
   move: false,
@@ -1862,7 +1863,9 @@ const FlowBuilder = () => {
   const [isSqlModalOpen, setIsSqlModalOpen] = useState(false);
   const [isAutoLayoutConfirmOpen, setIsAutoLayoutConfirmOpen] = useState(false);
   
-  const [showTutorial, setShowTutorial] = useState(() => !localStorage.getItem('bi-architect-visited'));
+  const [showTutorial, setShowTutorial] = useState(
+    () => localStorage.getItem('bi-architect-tutorial-version') !== TUTORIAL_CONTENT_VERSION,
+  );
   
   const [contextMenu, setContextMenu] = useState<{ id: string, top: number, left: number } | null>(null);
   const [paneAddMenu, setPaneAddMenu] = useState<{ top: number; left: number; position: { x: number; y: number } } | null>(null);
@@ -1959,7 +1962,7 @@ const FlowBuilder = () => {
 
   const closeTutorial = () => {
     setShowTutorial(false);
-    localStorage.setItem('bi-architect-visited', '1');
+    localStorage.setItem('bi-architect-tutorial-version', TUTORIAL_CONTENT_VERSION);
   };
 
   const isAnyCameraFocusEnabled = useMemo(() => Object.values(cameraFocusConfig).some(Boolean), [cameraFocusConfig]);
@@ -2915,7 +2918,7 @@ const FlowBuilder = () => {
         {/* ★ チュートリアルモーダル */}
         {showTutorial && (
           <div className={`fixed inset-0 z-[400] flex items-center justify-center p-8 backdrop-blur-md no-print ${isDark ? 'bg-black/90' : 'bg-gray-900/50'}`}>
-            <div className={`border rounded-2xl shadow-2xl w-[600px] overflow-hidden flex flex-col transition-colors ${isDark ? 'bg-[#1e1e1e] border-[#444]' : 'bg-white border-gray-200'}`}>
+            <div className={`border rounded-2xl shadow-2xl w-[760px] max-w-[92vw] max-h-[86vh] overflow-hidden flex flex-col transition-colors ${isDark ? 'bg-[#1e1e1e] border-[#444]' : 'bg-white border-gray-200'}`}>
               <div className={`p-4 border-b flex justify-between items-center transition-colors ${isDark ? 'bg-[#1a1a1a] border-[#444]' : 'bg-gray-50 border-gray-200'}`}>
                 <h2 className={`text-[12px] font-bold uppercase tracking-[0.4em] flex items-center gap-2 ${isDark ? 'text-white' : 'text-gray-800'}`}>
                   <span className="text-blue-500 w-4 h-4 flex items-center justify-center">{Icons.Help}</span> 
@@ -2926,19 +2929,41 @@ const FlowBuilder = () => {
                 </button>
               </div>
 
-              <div className={`p-8 flex flex-col items-center space-y-6 transition-colors ${isDark ? 'bg-[#1a1a1a]' : 'bg-white'}`}>
-                <div className={`text-[11px] leading-relaxed text-center ${isDark ? 'text-[#aaa]' : 'text-gray-600'}`}>
-                  ”ノード”を繋いで視覚的にデータを作る、データ整形ツールです。<br/><br/>基本的な使い方は以下の3ステップです。
+              <div className={`p-8 overflow-y-auto custom-scrollbar flex flex-col gap-6 transition-colors ${isDark ? 'bg-[#1a1a1a]' : 'bg-white'}`}>
+                <div className="text-center space-y-3">
+                  <div className={`text-[12px] leading-relaxed ${isDark ? 'text-[#ddd]' : 'text-gray-800'}`}>
+                    CSV / Excel / JSON の表データを、ノードベースで視覚的に整形・結合・集計できるツールです。
+                  </div>
+                  <p className={`text-[11px] leading-relaxed ${isDark ? 'text-[#999]' : 'text-gray-600'}`}>
+                    ファイルを読み込み、ノードをつなぎ、条件や変換を設定して、結果を確認しながらデータ前処理を組み立てられます。
+                  </p>
                 </div>
-                
+
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div className={`p-4 rounded-xl border transition-colors ${isDark ? 'bg-[#1e1e1e] border-[#444]' : 'bg-gray-50 border-gray-200'}`}>
+                    <div className={`text-[10px] font-bold uppercase tracking-widest mb-2 ${isDark ? 'text-white' : 'text-gray-800'}`}>主な用途</div>
+                    <div className={`text-[11px] leading-6 ${isDark ? 'text-[#aaa]' : 'text-gray-600'}`}>
+                      複数CSV / Excelの結合、売上や顧客データの整形、名寄せ、月次レポート前処理、グラフ表示前の集計、SQL化したい処理フローの可視化に向いています。
+                    </div>
+                  </div>
+                  <div className={`p-4 rounded-xl border transition-colors ${isDark ? 'bg-[#1e1e1e] border-[#444]' : 'bg-gray-50 border-gray-200'}`}>
+                    <div className={`text-[10px] font-bold uppercase tracking-widest mb-2 ${isDark ? 'text-white' : 'text-gray-800'}`}>主な特徴</div>
+                    <div className={`text-[11px] leading-6 ${isDark ? 'text-[#aaa]' : 'text-gray-600'}`}>
+                      ノーコード操作、ローカルファイル対応、Auto Folder、Paste Data、SQL相互変換、プレビューとダッシュボード、大規模データ向け最適化、操作補助を備えています。
+                    </div>
+                  </div>
+                </div>
+
                 <div className="w-full space-y-4 text-left">
+                  <div className={`text-[10px] font-bold uppercase tracking-widest ${isDark ? 'text-white' : 'text-gray-800'}`}>基本の流れ</div>
+
                   <div className={`p-4 rounded-xl border flex items-center gap-4 transition-colors ${isDark ? 'bg-[#1e1e1e] border-[#444] hover:border-blue-500/50' : 'bg-gray-50 border-gray-200 hover:border-gray-400'}`}>
                     <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg shrink-0 border transition-colors ${isDark ? 'bg-[#252526] text-blue-400 border-[#444]' : 'bg-white text-gray-800 border-gray-200 shadow-sm'}`}>
                       <span className="w-5 h-5 flex items-center justify-center">{Icons.Source}</span>
                     </div>
                     <div className="flex-1">
-                      <div className={`text-[10px] font-bold uppercase tracking-widest mb-1 ${isDark ? 'text-white' : 'text-gray-800'}`}>Step 1: Add Nodes</div>
-                      <p className={`text-[10px] leading-relaxed ${isDark ? 'text-[#888]' : 'text-gray-500'}`}>右の<strong>Toolbox</strong>からドラッグ＆ドロップするか、空白キャンバスを<strong>右クリック</strong>してノード一覧から追加します。</p>
+                      <div className={`text-[10px] font-bold uppercase tracking-widest mb-1 ${isDark ? 'text-white' : 'text-gray-800'}`}>Step 1: Source / Paste Data</div>
+                      <p className={`text-[10px] leading-relaxed ${isDark ? 'text-[#888]' : 'text-gray-500'}`}>`Source` または `Paste Data` ノードでデータを用意します。CSV / Excel / JSON の読込や、貼り付けた表データの直接編集に対応しています。</p>
                     </div>
                   </div>
 
@@ -2947,8 +2972,8 @@ const FlowBuilder = () => {
                       <span className="w-5 h-5 flex items-center justify-center">{Icons.Join}</span>
                     </div>
                     <div className="flex-1">
-                      <div className={`text-[10px] font-bold uppercase tracking-widest mb-1 ${isDark ? 'text-white' : 'text-gray-800'}`}>Step 2: Connect Flow</div>
-                      <p className={`text-[10px] leading-relaxed ${isDark ? 'text-[#888]' : 'text-gray-500'}`}>ノード同士の<strong>青い○（ハンドル）</strong>をマウスで繋ぐと、データが左から右へと流れて処理されます。<strong>AutoConnect</strong> がONなら新規ノード追加時に直前ノードへ自動接続されます。</p>
+                      <div className={`text-[10px] font-bold uppercase tracking-widest mb-1 ${isDark ? 'text-white' : 'text-gray-800'}`}>Step 2: Build Flow</div>
+                      <p className={`text-[10px] leading-relaxed ${isDark ? 'text-[#888]' : 'text-gray-500'}`}>必要なノードをつないで処理フローを作ります。各ノードで条件や対象列を設定すると、左から右へデータが流れて処理されます。</p>
                     </div>
                   </div>
 
@@ -2957,14 +2982,44 @@ const FlowBuilder = () => {
                       <span className="w-5 h-5 flex items-center justify-center">{Icons.Dashboard}</span>
                     </div>
                     <div className="flex-1">
-                      <div className={`text-[10px] font-bold uppercase tracking-widest mb-1 ${isDark ? 'text-white' : 'text-gray-800'}`}>Step 3: Preview & Export</div>
-                      <p className={`text-[10px] leading-relaxed ${isDark ? 'text-[#888]' : 'text-gray-500'}`}>画面下部の<strong>Preview</strong>に処理結果がリアルタイムで表示されます。Excel出力やSQL変換も可能です。</p>
+                      <div className={`text-[10px] font-bold uppercase tracking-widest mb-1 ${isDark ? 'text-white' : 'text-gray-800'}`}>Step 3: Preview / Export</div>
+                      <p className={`text-[10px] leading-relaxed ${isDark ? 'text-[#888]' : 'text-gray-500'}`}>下部プレビューで結果を確認し、必要に応じて `CSV` `XLSX` `JSON` へ出力します。チャート表示や SQL 変換も利用できます。</p>
                     </div>
+                  </div>
+                </div>
+
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div className={`p-4 rounded-xl border transition-colors ${isDark ? 'bg-[#1e1e1e] border-[#444]' : 'bg-gray-50 border-gray-200'}`}>
+                    <div className={`text-[10px] font-bold uppercase tracking-widest mb-2 ${isDark ? 'text-white' : 'text-gray-800'}`}>主なノード</div>
+                    <p className={`text-[11px] leading-6 ${isDark ? 'text-[#aaa]' : 'text-gray-600'}`}>
+                      `Source` `Auto Folder` `Paste Data` `Union` `Join` `VLOOKUP` `Minus` `Transform` `Calculate` `Select` `Filter` `Sort` `Group By` `JSON Array` `Visualizer`
+                    </p>
+                  </div>
+                  <div className={`p-4 rounded-xl border transition-colors ${isDark ? 'bg-[#1e1e1e] border-[#444]' : 'bg-gray-50 border-gray-200'}`}>
+                    <div className={`text-[10px] font-bold uppercase tracking-widest mb-2 ${isDark ? 'text-white' : 'text-gray-800'}`}>できること</div>
+                    <p className={`text-[11px] leading-6 ${isDark ? 'text-[#aaa]' : 'text-gray-600'}`}>
+                      複数ファイルの結合、必要列の抽出、条件付き変換、新規列追加、列位置指定、オートナンバー列作成、JSON配列展開、テーブルプレビュー、チャート表示、各種エクスポート、フロー保存に対応しています。
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div className={`p-4 rounded-xl border transition-colors ${isDark ? 'bg-[#1e1e1e] border-[#444]' : 'bg-gray-50 border-gray-200'}`}>
+                    <div className={`text-[10px] font-bold uppercase tracking-widest mb-2 ${isDark ? 'text-white' : 'text-gray-800'}`}>便利な操作</div>
+                    <p className={`text-[11px] leading-6 ${isDark ? 'text-[#aaa]' : 'text-gray-600'}`}>
+                      Toolbox からの追加、空白右クリックでのノード追加、AutoConnect、個別設定できるカメラフォーカス、ドラッグ削除、ノード最小化、ヘルプ表示、プレビュー件数制御と自動停止に対応しています。
+                    </p>
+                  </div>
+                  <div className={`p-4 rounded-xl border transition-colors ${isDark ? 'bg-[#1e1e1e] border-[#444]' : 'bg-gray-50 border-gray-200'}`}>
+                    <div className={`text-[10px] font-bold uppercase tracking-widest mb-2 ${isDark ? 'text-white' : 'text-gray-800'}`}>保存される設定</div>
+                    <p className={`text-[11px] leading-6 ${isDark ? 'text-[#aaa]' : 'text-gray-600'}`}>
+                      テーマ、ツールチップ表示、カメラフォーカス設定、Toolbox の折りたたみ状態、下部テーブル高さ、プレビュー表示件数、AutoConnect 設定は再起動後も引き継がれます。
+                    </p>
                   </div>
                 </div>
               </div>
               <button onClick={closeTutorial} className={`w-full p-4 text-[11px] font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-colors border-t ${isDark ? 'bg-[#252526] text-blue-400 border-[#444] hover:bg-[#333]' : 'bg-gray-800 text-white border-gray-800 hover:bg-gray-700'}`}>
-                <span className="w-4 h-4 flex items-center justify-center">{Icons.Diamond}</span> 使ってみる
+                <span className="w-4 h-4 flex items-center justify-center">{Icons.Diamond}</span> OK
               </button>
             </div>
           </div>
