@@ -1,6 +1,7 @@
-import React, { createContext, memo, useContext, useState } from 'react';
+import React, { createContext, memo, useContext, useEffect, useRef, useState } from 'react';
 import { Handle, Position, useReactFlow } from '@xyflow/react';
 import type * as XLSX from 'xlsx';
+import { createPortal } from 'react-dom';
 
 export type AppContextType = {
   workbooks: Record<string, XLSX.WorkBook>;
@@ -8,17 +9,17 @@ export type AppContextType = {
   setRangeModalNode: React.Dispatch<React.SetStateAction<string | null>>;
   setPasteEditorNode: React.Dispatch<React.SetStateAction<{ nodeId: string; selectionMode: boolean } | null>>;
   nodeFlowData: Record<string, any>;
-  isAutoCameraMove: boolean;
   showTooltips: boolean;
-  focusNode: (id: string, force?: boolean, instant?: boolean) => void;
+  focusNode: (id: string, force?: boolean, instant?: boolean, reason?: 'move' | 'delete' | 'resize' | 'connect' | 'create' | 'manual') => void;
   theme: 'light' | 'dark';
   activePreviewId: string | null;
+  introNodeId: string | null;
 };
 
 export const AppContext = createContext<AppContextType>({} as AppContextType);
 
 export const useNodeLogic = (id: string) => {
-  const { nodeFlowData, isAutoCameraMove, focusNode, theme, activePreviewId, showTooltips } = useContext(AppContext);
+  const { nodeFlowData, focusNode, theme, activePreviewId, showTooltips } = useContext(AppContext);
   const { updateNodeData, setNodes, setEdges, getEdges } = useReactFlow();
   const isDark = theme === 'dark';
 
@@ -29,17 +30,15 @@ export const useNodeLogic = (id: string) => {
     showTooltips,
     onChg: (k: string, v: any) => {
       updateNodeData(id, { [k]: v });
-      if (['command', 'joinType', 'chartType', 'matchType', 'aggType', 'groupCol', 'sortCol', 'targetCol', 'filterCol', 'xAxis', 'yAxis', 'applyCond', 'fetchCol', 'colA', 'colB', 'operator', 'newColName', 'createNewCol', 'checkCol', 'checkType'].includes(k)) {
-        focusNode(id);
+      if (['command', 'joinType', 'chartType', 'matchType', 'aggType', 'groupCol', 'sortCol', 'targetCol', 'filterCol', 'xAxis', 'yAxis', 'applyCond', 'fetchCol', 'colA', 'colB', 'operator', 'newColName', 'createNewCol', 'checkCol', 'checkType', 'autoNumberMode', 'autoNumberPrefix', 'autoNumberDigits'].includes(k)) {
+        focusNode(id, false, false, 'resize');
       }
     },
     onDel: () => {
-      if (isAutoCameraMove) {
-        const edges = getEdges();
-        const incomingEdge = edges.find((e: any) => e.target === id);
-        if (incomingEdge) {
-          focusNode(incomingEdge.source);
-        }
+      const edges = getEdges();
+      const incomingEdge = edges.find((e: any) => e.target === id);
+      if (incomingEdge) {
+        focusNode(incomingEdge.source, false, false, 'delete');
       }
       setNodes((nds: any) => nds.filter((n: any) => n.id !== id));
       setEdges((eds: any) => eds.filter((e: any) => e.source !== id && e.target !== id));
@@ -116,8 +115,11 @@ export const NodeWrap = memo(({
   helpText = '',
   statusTone = '',
 }: NodeWrapProps) => {
+  const { introNodeId } = useContext(AppContext);
   const { isDark, activePreviewId, showTooltips } = useNodeLogic(id);
   const [showHelp, setShowHelp] = useState(false);
+  const [tooltipRect, setTooltipRect] = useState<{ left: number; top: number } | null>(null);
+  const helpButtonRef = useRef<HTMLButtonElement | null>(null);
   const { updateNodeData } = useReactFlow();
 
   const isCollapsed = data?.isCollapsed || false;
@@ -131,9 +133,28 @@ export const NodeWrap = memo(({
   const borderClass = isPreview
     ? `border-blue-500 ring-2 ring-blue-500 shadow-[0_0_15px_rgba(59,130,246,0.5)] ${isDark ? 'ring-offset-[#1a1a1a]' : 'ring-offset-gray-50'} ring-offset-2`
     : statusBorderClass;
+  const introClass = introNodeId === id ? 'node-intro-pop' : '';
+
+  useEffect(() => {
+    if (!showHelp) return;
+
+    const updateTooltipRect = () => {
+      const rect = helpButtonRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      setTooltipRect({ left: rect.left, top: rect.bottom + 8 });
+    };
+
+    updateTooltipRect();
+    window.addEventListener('resize', updateTooltipRect);
+    window.addEventListener('scroll', updateTooltipRect, true);
+    return () => {
+      window.removeEventListener('resize', updateTooltipRect);
+      window.removeEventListener('scroll', updateTooltipRect, true);
+    };
+  }, [showHelp]);
 
   return (
-    <div className={`${isDark ? 'bg-[#252526]' : 'bg-white'} border ${borderClass} rounded-xl shadow-2xl min-w-[260px] pb-1 relative group/node transition-colors`}>
+    <div className={`${isDark ? 'bg-[#252526]' : 'bg-white'} border ${borderClass} ${introClass} rounded-xl shadow-2xl min-w-[260px] pb-1 relative group/node transition-colors`}>
       <div
         className={`${headerStatusClass} p-2 border-b flex justify-between items-center rounded-t-xl select-none group/header cursor-pointer transition-colors`}
         onDoubleClick={() => updateNodeData(id, { isCollapsed: !isCollapsed })}
@@ -150,15 +171,20 @@ export const NodeWrap = memo(({
           {helpText && showTooltips && (
             <div className="relative flex items-center">
               <button
+                ref={helpButtonRef}
                 onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowHelp(!showHelp); }}
                 className={`text-[10px] flex items-center justify-center w-4 h-4 rounded-full border nodrag transition-colors ${showHelp ? 'bg-blue-500 text-white border-blue-500' : (isDark ? 'text-[#888] hover:text-white border-[#555] bg-[#222]' : 'text-gray-500 hover:text-gray-800 border-gray-300 bg-gray-100')}`}
               >
                 ?
               </button>
-              {showHelp && (
-                <div className={`absolute left-0 top-full mt-2 w-56 text-[11px] p-3 rounded-lg border opacity-0 group-hover/node:opacity-100 pointer-events-none transition-opacity z-[999] shadow-2xl normal-case tracking-normal leading-relaxed ${isDark ? 'bg-[#111] text-[#ccc] border-[#555]' : 'bg-white text-gray-700 border-gray-300'}`}>
+              {showHelp && tooltipRect && createPortal(
+                <div
+                  style={{ left: tooltipRect.left, top: tooltipRect.top }}
+                  className={`fixed w-56 text-[11px] p-3 rounded-lg border pointer-events-none z-[99999] shadow-2xl normal-case tracking-normal leading-relaxed ${isDark ? 'bg-[#111] text-[#ccc] border-[#555]' : 'bg-white text-gray-700 border-gray-300'}`}
+                >
                   {helpText}
-                </div>
+                </div>,
+                document.body
               )}
             </div>
           )}
